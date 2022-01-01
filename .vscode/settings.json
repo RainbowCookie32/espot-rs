@@ -1,0 +1,8 @@
+{
+    "files.exclude": {
+        "target": true,
+        "**/.env": true,
+        "**/.spotify_token_cache.json": true,
+        "**/espot-rs": true
+    }
+}

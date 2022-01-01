@@ -1,0 +1,20 @@
+[package]
+name = "espot-rs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dirs = "4.0.0"
+image = "0.23.14"
+nanorand = "0.6.1"
+librespot = "0.3.1"
+futures-lite = "1.12.0"
+
+reqwest = "0.11.8"
+
+tokio = { version = "1.15.0", features = ["full"] }
+serde = { version = "1.0.132", features = ["derive"] }
+eframe = { version = "0.16.0", features = ["persistence"] }
+rspotify = { version = "0.11.3", features = ["cli", "env-file"] }
