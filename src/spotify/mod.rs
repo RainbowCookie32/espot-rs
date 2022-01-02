@@ -2,8 +2,8 @@ use reqwest::Client;
 use nanorand::{Rng, WyRand};
 use futures_lite::StreamExt;
 
-use tokio::sync::mpsc;
 use tokio::runtime::Runtime;
+use tokio::sync::{broadcast, mpsc};
 
 use librespot::core::session::Session;
 use librespot::core::config::SessionConfig;
@@ -17,30 +17,55 @@ use rspotify::auth_code::AuthCodeSpotify;
 use rspotify::model::{Id, TrackId, FullTrack};
 use rspotify::clients::{OAuthClient, BaseClient};
 
+
+type TaskTx = mpsc::UnboundedSender<WorkerTask>;
+type TaskRx = mpsc::UnboundedReceiver<WorkerTask>;
+
+type TaskResultTx = mpsc::UnboundedSender<WorkerResult>;
+type TaskResultRx = mpsc::UnboundedReceiver<WorkerResult>;
+
+type StateTx = broadcast::Sender<PlayerStateUpdate>;
+type StateRx = broadcast::Receiver<PlayerStateUpdate>;
+
+type ControlTx = mpsc::UnboundedSender<PlayerControl>;
+type ControlRx = mpsc::UnboundedReceiver<PlayerControl>;
+
+
 #[derive(Debug)]
 pub enum WorkerTask {
     Login(String, String),
     
     GetUserPlaylists,
-    GetPlaylistTracksInfo(Playlist),
-
-    StartPlaylist(Vec<FullTrack>),
-    StartPlaylistAtTrack(Vec<FullTrack>, FullTrack),
-    
-    PausePlayback,
-    ResumePlayback,
-
-    NextTrack,
-    PreviousTrack
+    GetPlaylistTracksInfo(Playlist)
 }
 
 #[derive(Debug)]
 pub enum WorkerResult {
     Login(bool),
     Playlists(Vec<Playlist>),
-    PlaylistTrackInfo(FullTrack),
+    PlaylistTrackInfo(FullTrack)
+}
 
-    TrackChanged(FullTrack)
+#[derive(Debug)]
+pub enum PlayerControl {
+    Play,
+    Pause,
+    Stop,
+    PlayPause,
+
+    StartPlaylist(Vec<FullTrack>),
+    StartPlaylistAtTrack(Vec<FullTrack>, FullTrack),
+
+    NextTrack,
+    PreviousTrack
+}
+
+#[derive(Clone, Debug)]
+pub enum PlayerStateUpdate {
+    Paused,
+    Resumed,
+    Stopped,
+    EndOfTrack(FullTrack)
 }
 
 pub struct SpotifyWorker {
@@ -50,16 +75,23 @@ pub struct SpotifyWorker {
     spotify_player: Option<Player>,
     spotify_session: Option<Session>,
 
-    worker_task_rx: mpsc::UnboundedReceiver<WorkerTask>,
-    worker_result_tx: mpsc::UnboundedSender<WorkerResult>,
+    state_tx: StateTx,
+    control_rx: ControlRx,
 
+    worker_task_rx: TaskRx,
+    worker_result_tx: TaskResultTx,
+
+    player_paused: bool,
     player_current_track: usize,
     player_tracks_queue: Vec<FullTrack>
 }
 
 impl SpotifyWorker {
-    pub fn start() -> (mpsc::UnboundedSender<WorkerTask>, mpsc::UnboundedReceiver<WorkerResult>) {
+    pub fn start() -> (TaskTx, TaskResultRx, StateRx, ControlTx) {
         let http_client = Client::new();
+
+        let (state_tx, state_rx) = broadcast::channel(5);
+        let (control_tx, control_rx) = mpsc::unbounded_channel();
 
         let (worker_task_tx, worker_task_rx) = mpsc::unbounded_channel();
         let (worker_result_tx, worker_result_rx) = mpsc::unbounded_channel();
@@ -80,9 +112,13 @@ impl SpotifyWorker {
             spotify_player: None,
             spotify_session: None,
 
+            state_tx,
+            control_rx,
+
             worker_task_rx,
             worker_result_tx,
 
+            player_paused: true,
             player_current_track: 0,
             player_tracks_queue: Vec::new()
         };
@@ -94,7 +130,7 @@ impl SpotifyWorker {
             rt.block_on(worker.process_events());
         });
 
-        (worker_task_tx, worker_result_rx)
+        (worker_task_tx, worker_result_rx, state_rx, control_tx)
     }
 
     pub async fn process_events(&mut self) {
@@ -117,13 +153,47 @@ impl SpotifyWorker {
                     WorkerTask::GetPlaylistTracksInfo(playlist) => {
                         self.fetch_playlist_tracks_info_task(playlist).await;
                     }
-                    WorkerTask::StartPlaylist(mut tracks) => {
-                        rng.shuffle(&mut tracks);
+                }
+            }
 
+            if let Ok(control) = self.control_rx.try_recv() {
+                match control {
+                    PlayerControl::Play => {
+                        if let Some(player) = self.spotify_player.as_ref() {
+                            player.play();
+                            self.state_tx.send(PlayerStateUpdate::Resumed);
+                        }
+                    }
+                    PlayerControl::Pause => {
+                        if let Some(player) = self.spotify_player.as_ref() {
+                            player.pause();
+                            self.state_tx.send(PlayerStateUpdate::Paused);
+                        }
+                    }
+                    PlayerControl::Stop => {
+                        if let Some(player) = self.spotify_player.as_ref() {
+                            player.stop();
+                            self.state_tx.send(PlayerStateUpdate::Stopped);
+                        }
+                    }
+                    PlayerControl::PlayPause => {
+                        if let Some(player) = self.spotify_player.as_ref() {
+                            if self.player_paused {
+                                player.play();
+                                self.state_tx.send(PlayerStateUpdate::Resumed);
+                            }
+                            else {
+                                player.pause();
+                                self.state_tx.send(PlayerStateUpdate::Paused);
+                            }
+                        }
+                    }
+                    PlayerControl::StartPlaylist(mut tracks) => {
+                        rng.shuffle(&mut tracks);
                         self.start_playlist_task(tracks);
                         
                     }
-                    WorkerTask::StartPlaylistAtTrack(mut tracks, start) => {
+                    PlayerControl::StartPlaylistAtTrack(mut tracks, start) => {
                         let mut idx = 0;
                         rng.shuffle(&mut tracks);
 
@@ -136,17 +206,7 @@ impl SpotifyWorker {
 
                         self.start_playlist_at_idx_task(tracks, idx);
                     }
-                    WorkerTask::PausePlayback => {
-                        if let Some(player) = self.spotify_player.as_ref() {
-                            player.pause()
-                        }
-                    }
-                    WorkerTask::ResumePlayback => {
-                        if let Some(player) = self.spotify_player.as_ref() {
-                            player.play()
-                        }
-                    }
-                    WorkerTask::NextTrack => {
+                    PlayerControl::NextTrack => {
                         if let Some(player) = self.spotify_player.as_mut() {
                             self.player_current_track += 1;
 
@@ -157,12 +217,12 @@ impl SpotifyWorker {
                             let track = &self.player_tracks_queue[self.player_current_track];
                             let track_id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
 
-                            self.worker_result_tx.send(WorkerResult::TrackChanged(track.clone())).unwrap();
+                            self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
 
                             player.load(track_id, true, 0);
                         }
                     }
-                    WorkerTask::PreviousTrack => {
+                    PlayerControl::PreviousTrack => {
                         if let Some(player) = self.spotify_player.as_mut() {
                             if self.player_current_track == 0 {
                                 self.player_current_track = self.player_tracks_queue.len() - 1;
@@ -174,7 +234,7 @@ impl SpotifyWorker {
                             let track = &self.player_tracks_queue[self.player_current_track];
                             let track_id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
 
-                            self.worker_result_tx.send(WorkerResult::TrackChanged(track.clone())).unwrap();
+                            self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
 
                             player.load(track_id, true, 0);
                         }
@@ -185,6 +245,12 @@ impl SpotifyWorker {
             if let Some(events_rx) = player_events.as_mut() {
                 if let Ok(event) = events_rx.try_recv() {
                     match event {
+                        PlayerEvent::Paused { .. } => {
+                            self.player_paused = true;
+                        }
+                        PlayerEvent::Playing { .. } | PlayerEvent::Started { .. } => {
+                            self.player_paused = false;
+                        }
                         PlayerEvent::TimeToPreloadNextTrack { .. } => {
                             if !self.player_tracks_queue.is_empty() {
                                 let target = {
@@ -215,7 +281,7 @@ impl SpotifyWorker {
                                 let track = &self.player_tracks_queue[self.player_current_track];
                                 let track_id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
 
-                                self.worker_result_tx.send(WorkerResult::TrackChanged(track.clone())).unwrap();
+                                self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
 
                                 player.load(track_id, true, 0);
                                 player.play();
@@ -337,7 +403,7 @@ impl SpotifyWorker {
             let id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
 
             player.load(id, true, 0);
-            self.worker_result_tx.send(WorkerResult::TrackChanged(track.clone())).unwrap();
+            self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
         }
     }
 
@@ -350,7 +416,7 @@ impl SpotifyWorker {
             let id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
 
             player.load(id, true, 0);
-            self.worker_result_tx.send(WorkerResult::TrackChanged(track.clone())).unwrap();
+            self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
         }
     }
 }

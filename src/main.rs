@@ -1,12 +1,12 @@
 mod spotify;
 
-use image::GenericImageView;
 use eframe::{egui, epi};
-use rspotify::model::{FullTrack, Id};
+use image::GenericImageView;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, mpsc};
 
-use tokio::sync::mpsc;
 use librespot::metadata::Playlist;
+use rspotify::model::{FullTrack, Id};
 
 use spotify::*;
 
@@ -39,6 +39,11 @@ pub struct EspotApp {
     selected_playlist_tracks: Vec<FullTrack>,
 
     #[serde(skip)]
+    state_rx: Option<broadcast::Receiver<PlayerStateUpdate>>,
+    #[serde(skip)]
+    control_tx: Option<mpsc::UnboundedSender<PlayerControl>>,
+
+    #[serde(skip)]
     worker_task_tx: Option<mpsc::UnboundedSender<WorkerTask>>,
     #[serde(skip)]
     worker_result_rx: Option<mpsc::UnboundedReceiver<WorkerResult>>,
@@ -51,7 +56,7 @@ pub struct EspotApp {
 
 impl Default for EspotApp {
     fn default() -> EspotApp {
-        let (tx, rx) = SpotifyWorker::start();
+        let (worker_task_tx, worker_result_rx, state_rx, control_tx) = SpotifyWorker::start();
 
         EspotApp {
             logged_in: false,
@@ -70,8 +75,11 @@ impl Default for EspotApp {
             selected_playlist: None,
             selected_playlist_tracks: Vec::new(),
 
-            worker_task_tx: Some(tx),
-            worker_result_rx: Some(rx),
+            state_rx: Some(state_rx),
+            control_tx: Some(control_tx),
+
+            worker_task_tx: Some(worker_task_tx),
+            worker_result_rx: Some(worker_result_rx),
 
             texture_no_cover: None,
             texture_album_cover: None
@@ -92,10 +100,13 @@ impl epi::App for EspotApp {
         self.paused = true;
 
         if self.worker_task_tx.is_none() {
-            let (tx, rx) = spotify::SpotifyWorker::start();
+            let (worker_task_tx, worker_result_rx, state_rx, control_tx) = SpotifyWorker::start();
 
-            self.worker_task_tx = Some(tx);
-            self.worker_result_rx = Some(rx);
+            self.state_rx = Some(state_rx);
+            self.control_tx = Some(control_tx);
+
+            self.worker_task_tx = Some(worker_task_tx);
+            self.worker_result_rx = Some(worker_result_rx);
         }
 
         let mut definitions = egui::FontDefinitions::default();
@@ -152,6 +163,35 @@ impl epi::App for EspotApp {
             self.login_screen(ctx);
         }
 
+        if let Some(rx) = self.state_rx.as_mut() {
+            if let Ok(state) = rx.try_recv() {
+                match state {
+                    PlayerStateUpdate::Paused => {
+                        self.paused = true;
+                    }
+                    PlayerStateUpdate::Resumed => {
+                        self.paused = false;
+                    }
+                    PlayerStateUpdate::Stopped => {
+                        self.current_track = None;
+
+                        if let Some((_, id)) = self.texture_album_cover {
+                            frame.free_texture(id);
+                            self.texture_album_cover = None;
+                        }
+                    }
+                    PlayerStateUpdate::EndOfTrack(track) => {
+                        self.current_track = Some(track);
+
+                        if let Some((_, id)) = self.texture_album_cover {
+                            frame.free_texture(id);
+                            self.texture_album_cover = None;
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(rx) = self.worker_result_rx.as_mut() {
             if let Ok(worker_res) = rx.try_recv() {
                 match worker_res {
@@ -169,14 +209,6 @@ impl epi::App for EspotApp {
                     }
                     WorkerResult::PlaylistTrackInfo(track) => {
                         self.selected_playlist_tracks.push(track);
-                    }
-                    WorkerResult::TrackChanged(track) => {
-                        self.current_track = Some(track);
-
-                        if let Some((_, id)) = self.texture_album_cover {
-                            frame.free_texture(id);
-                            self.texture_album_cover = None;
-                        }
                     }
                 }
             }
@@ -258,8 +290,8 @@ impl EspotApp {
         
                         ui.add_enabled_ui(can_move, | ui | {
                             if ui.button("⏮").clicked() {
-                                if let Some(tx) = self.worker_task_tx.as_ref() {
-                                    tx.send(WorkerTask::PreviousTrack).unwrap();
+                                if let Some(tx) = self.control_tx.as_ref() {
+                                    tx.send(PlayerControl::PreviousTrack).unwrap();
                                 }
                             }
                         });
@@ -268,16 +300,16 @@ impl EspotApp {
                             let button_label = if self.paused {"▶"} else {"⏸"};
 
                             if ui.button(button_label).clicked() {
-                                if let Some(tx) = self.worker_task_tx.as_ref() {
+                                if let Some(tx) = self.control_tx.as_ref() {
                                     if !self.playback_started {
                                         self.playback_started = true;
-                                        tx.send(WorkerTask::StartPlaylist(self.selected_playlist_tracks.clone())).unwrap();
+                                        tx.send(PlayerControl::StartPlaylist(self.selected_playlist_tracks.clone())).unwrap();
                                     }
                                     else if self.paused {
-                                        tx.send(WorkerTask::ResumePlayback).unwrap();
+                                        tx.send(PlayerControl::Play).unwrap();
                                     }
                                     else {
-                                        tx.send(WorkerTask::PausePlayback).unwrap();
+                                        tx.send(PlayerControl::Pause).unwrap();
                                     }
             
                                     self.paused = !self.paused;
@@ -287,8 +319,8 @@ impl EspotApp {
         
                         ui.add_enabled_ui(can_move, | ui | {
                             if ui.button("⏭").clicked() {
-                                if let Some(tx) = self.worker_task_tx.as_ref() {
-                                    tx.send(WorkerTask::NextTrack).unwrap();
+                                if let Some(tx) = self.control_tx.as_ref() {
+                                    tx.send(PlayerControl::NextTrack).unwrap();
                                 }
                             }
                         });
@@ -347,11 +379,11 @@ impl EspotApp {
                         if ui.button("Play").clicked() {
                             if let Some(i) = self.selected_playlist.as_ref() {
                                 if *i < self.playlists.len() {
-                                    if let Some(tx) = self.worker_task_tx.as_ref() {
+                                    if let Some(tx) = self.control_tx.as_ref() {
                                         self.paused = false;
                                         self.playback_started = true;
 
-                                        tx.send(WorkerTask::StartPlaylist(self.selected_playlist_tracks.clone())).unwrap();
+                                        tx.send(PlayerControl::StartPlaylist(self.selected_playlist_tracks.clone())).unwrap();
                                     }
                                 }
                             }
@@ -391,11 +423,11 @@ impl EspotApp {
                         
                         if cols[0].selectable_label(false, title_label).clicked() {
                             if self.is_playlist_ready() {
-                                if let Some(tx) = self.worker_task_tx.as_ref() {
+                                if let Some(tx) = self.control_tx.as_ref() {
                                     self.paused = false;
                                     self.playback_started = true;
     
-                                    tx.send(WorkerTask::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone())).unwrap();
+                                    tx.send(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone())).unwrap();
                                 }
                             }
                         }
