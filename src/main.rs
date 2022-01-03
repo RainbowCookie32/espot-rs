@@ -1,3 +1,4 @@
+mod dbus;
 mod spotify;
 
 use eframe::{egui, epi};
@@ -56,7 +57,7 @@ pub struct EspotApp {
 
 impl Default for EspotApp {
     fn default() -> EspotApp {
-        let (worker_task_tx, worker_result_rx, state_rx, control_tx) = SpotifyWorker::start();
+        let (worker_task_tx, worker_result_rx, state_rx, state_rx_dbus, control_tx) = SpotifyWorker::start();
 
         EspotApp {
             logged_in: false,
@@ -100,7 +101,9 @@ impl epi::App for EspotApp {
         self.paused = true;
 
         if self.worker_task_tx.is_none() {
-            let (worker_task_tx, worker_result_rx, state_rx, control_tx) = SpotifyWorker::start();
+            let (worker_task_tx, worker_result_rx, state_rx, state_rx_dbus, control_tx) = SpotifyWorker::start();
+
+            dbus::start_dbus_server(state_rx_dbus, control_tx.clone());
 
             self.state_rx = Some(state_rx);
             self.control_tx = Some(control_tx);

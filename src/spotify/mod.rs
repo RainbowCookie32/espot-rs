@@ -87,7 +87,7 @@ pub struct SpotifyWorker {
 }
 
 impl SpotifyWorker {
-    pub fn start() -> (TaskTx, TaskResultRx, StateRx, ControlTx) {
+    pub fn start() -> (TaskTx, TaskResultRx, StateRx, StateRx, ControlTx) {
         let http_client = Client::new();
 
         let (state_tx, state_rx) = broadcast::channel(5);
@@ -97,6 +97,8 @@ impl SpotifyWorker {
         let (worker_result_tx, worker_result_rx) = mpsc::unbounded_channel();
 
         let cache_dir = dirs::cache_dir().unwrap().join("espot-rs");
+
+        let state_rx_2 = state_tx.subscribe();
 
         if let Err(err) = std::fs::create_dir_all(cache_dir) {
             match err.kind() {
@@ -130,7 +132,7 @@ impl SpotifyWorker {
             rt.block_on(worker.process_events());
         });
 
-        (worker_task_tx, worker_result_rx, state_rx, control_tx)
+        (worker_task_tx, worker_result_rx, state_rx, state_rx_2, control_tx)
     }
 
     pub async fn process_events(&mut self) {
@@ -161,30 +163,30 @@ impl SpotifyWorker {
                     PlayerControl::Play => {
                         if let Some(player) = self.spotify_player.as_ref() {
                             player.play();
-                            self.state_tx.send(PlayerStateUpdate::Resumed);
+                            self.state_tx.send(PlayerStateUpdate::Resumed).unwrap();
                         }
                     }
                     PlayerControl::Pause => {
                         if let Some(player) = self.spotify_player.as_ref() {
                             player.pause();
-                            self.state_tx.send(PlayerStateUpdate::Paused);
+                            self.state_tx.send(PlayerStateUpdate::Paused).unwrap();
                         }
                     }
                     PlayerControl::Stop => {
                         if let Some(player) = self.spotify_player.as_ref() {
                             player.stop();
-                            self.state_tx.send(PlayerStateUpdate::Stopped);
+                            self.state_tx.send(PlayerStateUpdate::Stopped).unwrap();
                         }
                     }
                     PlayerControl::PlayPause => {
                         if let Some(player) = self.spotify_player.as_ref() {
                             if self.player_paused {
                                 player.play();
-                                self.state_tx.send(PlayerStateUpdate::Resumed);
+                                self.state_tx.send(PlayerStateUpdate::Resumed).unwrap();
                             }
                             else {
                                 player.pause();
-                                self.state_tx.send(PlayerStateUpdate::Paused);
+                                self.state_tx.send(PlayerStateUpdate::Paused).unwrap();
                             }
                         }
                     }
