@@ -57,7 +57,7 @@ pub struct EspotApp {
 
 impl Default for EspotApp {
     fn default() -> EspotApp {
-        let (worker_task_tx, worker_result_rx, state_rx, state_rx_dbus, control_tx) = SpotifyWorker::start();
+        let (worker_task_tx, worker_result_rx, state_rx, _, control_tx) = SpotifyWorker::start();
 
         EspotApp {
             logged_in: false,

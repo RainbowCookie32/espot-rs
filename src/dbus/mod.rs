@@ -25,6 +25,45 @@ impl ToString for PlaybackStatus {
     }
 }
 
+struct Mpris;
+
+#[dbus_interface(name = "org.mpris.MediaPlayer2")]
+impl Mpris {
+    async fn raise(&self) {}
+
+    async fn quit(&self) {}
+
+    #[dbus_interface(property)]
+    async fn can_quit(&self) -> bool {
+        false
+    }
+
+    #[dbus_interface(property)]
+    async fn fullscreen(&self) -> bool {
+        false
+    }
+
+    #[dbus_interface(property)]
+    async fn can_set_fullscreen(&self) -> bool {
+        false
+    }
+
+    #[dbus_interface(property)]
+    async fn can_raise(&self) -> bool {
+        false
+    }
+
+    #[dbus_interface(property)]
+    async fn has_track_list(&self) -> bool {
+        false
+    }
+
+    #[dbus_interface(property)]
+    async fn identity(&self) -> &str {
+        "espot-rs"
+    }
+}
+
 struct MprisPlayer {
     pub track: Option<FullTrack>,
     pub status: PlaybackStatus,
@@ -120,6 +159,11 @@ async fn dbus_loop(state_rx: broadcast::Receiver<PlayerStateUpdate>, control_tx:
 
         control_tx
     };
+
+    connection.object_server()
+        .at("/org/mpris/MediaPlayer2", Mpris)
+        .await?
+    ;
 
     connection.object_server()
         .at("/org/mpris/MediaPlayer2", handler)
