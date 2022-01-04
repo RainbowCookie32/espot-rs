@@ -1,5 +1,6 @@
 mod dbus;
 mod spotify;
+mod spinner;
 
 use eframe::{egui, epi};
 use image::GenericImageView;
@@ -184,6 +185,7 @@ impl epi::App for EspotApp {
                         }
                     }
                     PlayerStateUpdate::EndOfTrack(track) => {
+                        self.paused = false;
                         self.current_track = Some(track);
 
                         if let Some((_, id)) = self.texture_album_cover {
@@ -372,26 +374,27 @@ impl EspotApp {
             egui::ScrollArea::vertical().show(ui, | ui | {
                 ui.horizontal(| ui | {
                     if let Some(idx) = self.selected_playlist.as_ref() {
-                        ui.strong(&self.playlists[*idx].name);
+                        let track_count = &self.playlists[*idx].tracks.len();
+                        let playlist_title = &self.playlists[*idx].name;
+
+                        let label = {
+                            if *track_count == 1 {
+                                format!("{} (1 track)", playlist_title)
+                            }
+                            else {
+                                format!("{} ({} tracks)", playlist_title, track_count)
+                            }
+                        };
+
+                        ui.strong(label);
                     }
                     else {
                         ui.strong("Select a playlist on the sidebar...");
                     }
-    
-                    ui.add_enabled_ui(self.is_playlist_ready(), | ui | {
-                        if ui.button("Play").clicked() {
-                            if let Some(i) = self.selected_playlist.as_ref() {
-                                if *i < self.playlists.len() {
-                                    if let Some(tx) = self.control_tx.as_ref() {
-                                        self.paused = false;
-                                        self.playback_started = true;
 
-                                        tx.send(PlayerControl::StartPlaylist(self.selected_playlist_tracks.clone())).unwrap();
-                                    }
-                                }
-                            }
-                        }
-                    });
+                    if self.selected_playlist.is_some() && !self.is_playlist_ready() {
+                        ui.add(spinner::Spinner::new());
+                    }
                 });
 
                 ui.separator();
