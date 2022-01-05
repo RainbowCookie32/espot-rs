@@ -210,8 +210,8 @@ impl epi::App for EspotApp {
                         self.playlists = playlists;
                         self.fetching_playlists = false;
                     }
-                    WorkerResult::PlaylistTrackInfo(track) => {
-                        self.selected_playlist_tracks.push(track);
+                    WorkerResult::PlaylistTrackInfo(tracks) => {
+                        self.selected_playlist_tracks = tracks;
                     }
                 }
             }

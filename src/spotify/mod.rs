@@ -49,7 +49,7 @@ pub enum WorkerTask {
 pub enum WorkerResult {
     Login(bool),
     Playlists(Vec<Playlist>),
-    PlaylistTrackInfo(TrackInfo)
+    PlaylistTrackInfo(Vec<TrackInfo>)
 }
 
 #[derive(Debug)]
@@ -375,11 +375,12 @@ impl SpotifyWorker {
         if let Some(client) = self.api_client.as_ref() {
             let cache_dir = dirs::cache_dir().unwrap().join("espot-rs");
 
+            let mut tracks = Vec::with_capacity(playlist.tracks.len());
             let mut cache_modified = false;
 
             for track_id in playlist.tracks {
                 if let Some(track) = self.api_cache.get(&track_id.to_uri()) {
-                    self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(track.clone())).unwrap();
+                    tracks.push(track.clone());
                 }
                 else {
                     let track_id = TrackId::from_id(&track_id.to_base62()).unwrap();
@@ -408,8 +409,9 @@ impl SpotifyWorker {
                             }
                             
                             cache_modified = true;
-                            self.api_cache.insert(track_id.uri(), track.clone());
-                            self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(track)).unwrap();
+                            tracks.push(track.clone());
+
+                            self.api_cache.insert(track_id.uri(), track);
                         }
                     }
                 }
@@ -422,6 +424,8 @@ impl SpotifyWorker {
                     }
                 }
             }
+
+            self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(tracks)).unwrap();
         }
     }
 
