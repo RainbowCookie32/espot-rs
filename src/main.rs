@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
 use librespot::metadata::Playlist;
-use rspotify::model::{FullTrack, Id};
 
 use spotify::*;
 
@@ -33,12 +32,12 @@ pub struct EspotApp {
     playback_started: bool,
 
     #[serde(skip)]
-    current_track: Option<FullTrack>,
+    current_track: Option<TrackInfo>,
 
     #[serde(skip)]
     selected_playlist: Option<usize>,
     #[serde(skip)]
-    selected_playlist_tracks: Vec<FullTrack>,
+    selected_playlist_tracks: Vec<TrackInfo>,
 
     #[serde(skip)]
     state_rx: Option<broadcast::Receiver<PlayerStateUpdate>>,
@@ -143,8 +142,7 @@ impl epi::App for EspotApp {
 
         if let Some(track) = self.current_track.as_ref() {
             if self.texture_album_cover.is_none() {
-                let album_id = track.album.id.clone().unwrap();
-                let album_id = album_id.id();
+                let album_id = &track.album_id;
                 let cover_path = dirs::cache_dir().unwrap().join(format!("espot-rs/cover-{}", album_id));
 
                 if let Ok(buffer) = std::fs::read(cover_path) {
@@ -269,7 +267,7 @@ impl EspotApp {
                             let mut artists_label = String::new();
 
                             for (i, artist) in track.artists.iter().enumerate() {
-                                artists_label.push_str(&artist.name);
+                                artists_label.push_str(artist);
 
                                 if i != track.artists.len() - 1 {
                                     artists_label.push_str(", ");
@@ -414,7 +412,7 @@ impl EspotApp {
                             let mut artists_label = String::new();
 
                             for (i, artist) in track.artists.iter().enumerate() {
-                                artists_label.push_str(&artist.name);
+                                artists_label.push_str(artist);
 
                                 if i != track.artists.len() - 1 {
                                     artists_label.push_str(", ");
@@ -424,8 +422,8 @@ impl EspotApp {
                             EspotApp::trim_string(cols[1].available_width(), glyph_width, artists_label)
                         };
 
-                        let album_label = EspotApp::trim_string(cols[2].available_width(), glyph_width, track.album.name.clone());
-                        let duration_label = EspotApp::trim_string(cols[3].available_width(), glyph_width, format!("{}:{:02}", track.duration.as_secs() / 60, track.duration.as_secs() % 60));
+                        let album_label = EspotApp::trim_string(cols[2].available_width(), glyph_width, track.album_name.clone());
+                        let duration_label = EspotApp::trim_string(cols[3].available_width(), glyph_width, format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60));
                         
                         if cols[0].selectable_label(false, title_label).clicked() {
                             if self.is_playlist_ready() {

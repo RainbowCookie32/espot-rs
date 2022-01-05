@@ -1075,6 +1075,7 @@ dependencies = [
  "librespot",
  "nanorand",
  "reqwest",
+ "ron",
  "rspotify",
  "serde",
  "tokio",

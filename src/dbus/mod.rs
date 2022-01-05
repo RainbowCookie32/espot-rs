@@ -1,12 +1,10 @@
 use tokio::runtime::Runtime;
 use tokio::sync::{broadcast, mpsc};
 
-use rspotify::model::FullTrack;
-
 use zbus::fdo::Result;
 use zbus::{Connection, dbus_interface};
 
-use crate::spotify::{PlayerControl, PlayerStateUpdate};
+use crate::spotify::{PlayerControl, PlayerStateUpdate, TrackInfo};
 
 #[derive(Clone)]
 enum PlaybackStatus {
@@ -65,7 +63,7 @@ impl Mpris {
 }
 
 struct MprisPlayer {
-    pub track: Option<FullTrack>,
+    pub track: Option<TrackInfo>,
     pub status: PlaybackStatus,
 
     control_tx: mpsc::UnboundedSender<PlayerControl>

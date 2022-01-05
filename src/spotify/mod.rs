@@ -1,3 +1,7 @@
+mod cache;
+
+use std::collections::HashMap;
+
 use reqwest::Client;
 use nanorand::{Rng, WyRand};
 use futures_lite::StreamExt;
@@ -13,9 +17,11 @@ use librespot::core::authentication::Credentials;
 use librespot::playback::player::{Player, PlayerEvent};
 use librespot::metadata::{Playlist, Metadata};
 
+use rspotify::model::{Id, TrackId};
 use rspotify::auth_code::AuthCodeSpotify;
-use rspotify::model::{Id, TrackId, FullTrack};
 use rspotify::clients::{OAuthClient, BaseClient};
+
+pub use cache::TrackInfo;
 
 
 type TaskTx = mpsc::UnboundedSender<WorkerTask>;
@@ -43,7 +49,7 @@ pub enum WorkerTask {
 pub enum WorkerResult {
     Login(bool),
     Playlists(Vec<Playlist>),
-    PlaylistTrackInfo(FullTrack)
+    PlaylistTrackInfo(TrackInfo)
 }
 
 #[derive(Debug)]
@@ -53,8 +59,8 @@ pub enum PlayerControl {
     Stop,
     PlayPause,
 
-    StartPlaylist(Vec<FullTrack>),
-    StartPlaylistAtTrack(Vec<FullTrack>, FullTrack),
+    StartPlaylist(Vec<TrackInfo>),
+    StartPlaylistAtTrack(Vec<TrackInfo>, TrackInfo),
 
     NextTrack,
     PreviousTrack
@@ -65,13 +71,15 @@ pub enum PlayerStateUpdate {
     Paused,
     Resumed,
     Stopped,
-    EndOfTrack(FullTrack)
+    EndOfTrack(TrackInfo)
 }
 
 pub struct SpotifyWorker {
     http_client: Client,
 
+    api_cache: HashMap<String, TrackInfo>,
     api_client: Option<AuthCodeSpotify>,
+
     spotify_player: Option<Player>,
     spotify_session: Option<Session>,
 
@@ -83,7 +91,7 @@ pub struct SpotifyWorker {
 
     player_paused: bool,
     player_current_track: usize,
-    player_tracks_queue: Vec<FullTrack>
+    player_tracks_queue: Vec<TrackInfo>
 }
 
 impl SpotifyWorker {
@@ -100,17 +108,21 @@ impl SpotifyWorker {
 
         let state_rx_2 = state_tx.subscribe();
 
-        if let Err(err) = std::fs::create_dir_all(cache_dir) {
+        if let Err(err) = std::fs::create_dir_all(&cache_dir) {
             match err.kind() {
                 std::io::ErrorKind::AlreadyExists => {},
                 _ => panic!("failed to create cache directory")
             }
         }
 
+        let api_cache = ron::from_str(&std::fs::read_to_string(&cache_dir.join("tracks.ron")).unwrap_or_default()).unwrap_or_default();
+
         let worker = SpotifyWorker {
             http_client,
 
             api_client: None,
+            api_cache,
+
             spotify_player: None,
             spotify_session: None,
 
@@ -217,7 +229,7 @@ impl SpotifyWorker {
                             }
 
                             let track = &self.player_tracks_queue[self.player_current_track];
-                            let track_id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
+                            let track_id = SpotifyId::from_uri(&track.id).unwrap();
 
                             self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
 
@@ -234,7 +246,7 @@ impl SpotifyWorker {
                             }
 
                             let track = &self.player_tracks_queue[self.player_current_track];
-                            let track_id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
+                            let track_id = SpotifyId::from_uri(&track.id).unwrap();
 
                             self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
 
@@ -265,7 +277,7 @@ impl SpotifyWorker {
                                 };
 
                                 let track = &self.player_tracks_queue[target];
-                                let track_id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
+                                let track_id = SpotifyId::from_uri(&track.id).unwrap();
     
                                 if let Some(player) = self.spotify_player.as_ref() {
                                     player.preload(track_id)
@@ -281,7 +293,7 @@ impl SpotifyWorker {
 
                             if let Some(player) = self.spotify_player.as_mut() {
                                 let track = &self.player_tracks_queue[self.player_current_track];
-                                let track_id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
+                                let track_id = SpotifyId::from_uri(&track.id).unwrap();
 
                                 self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
 
@@ -363,61 +375,78 @@ impl SpotifyWorker {
         if let Some(client) = self.api_client.as_ref() {
             let cache_dir = dirs::cache_dir().unwrap().join("espot-rs");
 
+            let mut cache_modified = false;
+
             for track_id in playlist.tracks {
-                if let Ok(track) = client.track(&TrackId::from_id(&track_id.to_base62()).unwrap()).await {
-                    let album_id = track.album.id.clone().unwrap();
-                    let album_id = album_id.id();
+                if let Some(track) = self.api_cache.get(&track_id.to_uri()) {
+                    self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(track.clone())).unwrap();
+                }
+                else {
+                    let track_id = TrackId::from_id(&track_id.to_base62()).unwrap();
 
-                    let cover_path = cache_dir.join(format!("cover-{}", album_id));
+                    if let Ok(track) = client.track(&track_id).await {
+                        if let Some(track) = TrackInfo::new(track) {
+                            let album_id = &track.album_id;
+                            let cover_path = cache_dir.join(format!("cover-{}", album_id));
 
-                    if std::fs::File::open(&cover_path).is_err() {
-                        for image in track.album.images.iter() {
-                            if let Some(size) = image.width {
-                                if size == 300 {
-                                    if let Ok(res) = self.http_client.get(&image.url).send().await {
-                                        let bytes = res.bytes().await.unwrap_or_default().to_vec();
-    
-                                        if !bytes.is_empty() {
-                                            if let Err(e) = std::fs::write(&cover_path, bytes) {
-                                                println!("error writing cover file: {}", e.to_string());
+                            if std::fs::File::open(&cover_path).is_err() {
+                                for (size, url) in track.album_images.iter() {
+                                    if *size == 300 {
+                                        if let Ok(res) = self.http_client.get(url).send().await {
+                                            let bytes = res.bytes().await.unwrap_or_default().to_vec();
+        
+                                            if !bytes.is_empty() {
+                                                if let Err(e) = std::fs::write(&cover_path, bytes) {
+                                                    println!("error writing cover file: {}", e.to_string());
+                                                }
                                             }
                                         }
+        
+                                        break;
                                     }
-    
-                                    break;
                                 }
                             }
+                            
+                            cache_modified = true;
+                            self.api_cache.insert(track_id.uri(), track.clone());
+                            self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(track)).unwrap();
                         }
                     }
+                }
+            }
 
-                    self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(track)).unwrap();
+            if cache_modified {
+                if let Ok(data) = ron::ser::to_string_pretty(&self.api_cache, ron::ser::PrettyConfig::default()) {
+                    if let Err(e) = tokio::fs::write(cache_dir.join("tracks.ron"), data).await {
+                        println!("Error saving api cache: {}", e.to_string());
+                    }
                 }
             }
         }
     }
 
-    pub fn start_playlist_task(&mut self, tracks: Vec<FullTrack>) {
+    pub fn start_playlist_task(&mut self, tracks: Vec<TrackInfo>) {
         self.player_current_track = 0;
         self.player_tracks_queue = tracks;
 
         if let Some(player) = self.spotify_player.as_mut() {
             let track = &self.player_tracks_queue[self.player_current_track];
-            let id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
+            let track_id = SpotifyId::from_uri(&track.id).unwrap();
 
-            player.load(id, true, 0);
+            player.load(track_id, true, 0);
             self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
         }
     }
 
-    pub fn start_playlist_at_idx_task(&mut self, tracks: Vec<FullTrack>, idx: usize) {
+    pub fn start_playlist_at_idx_task(&mut self, tracks: Vec<TrackInfo>, idx: usize) {
         self.player_current_track = idx;
         self.player_tracks_queue = tracks;
 
         if let Some(player) = self.spotify_player.as_mut() {
             let track = &self.player_tracks_queue[idx];
-            let id = SpotifyId::from_uri(&track.id.clone().unwrap().uri()).unwrap();
+            let track_id = SpotifyId::from_uri(&track.id).unwrap();
 
-            player.load(id, true, 0);
+            player.load(track_id, true, 0);
             self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
         }
     }
