@@ -369,33 +369,32 @@ impl EspotApp {
         });
 
         egui::CentralPanel::default().show(ctx, | ui | {
-            egui::ScrollArea::vertical().show(ui, | ui | {
-                ui.horizontal(| ui | {
-                    if let Some(idx) = self.selected_playlist.as_ref() {
-                        let track_count = &self.playlists[*idx].tracks.len();
-                        let playlist_title = &self.playlists[*idx].name;
+            if let Some(idx) = self.selected_playlist.as_ref() {
+                let track_count = &self.playlists[*idx].tracks.len();
+                let playlist_title = &self.playlists[*idx].name;
 
-                        let label = {
-                            if *track_count == 1 {
-                                format!("{} (1 track)", playlist_title)
-                            }
-                            else {
-                                format!("{} ({} tracks)", playlist_title, track_count)
-                            }
-                        };
-
-                        ui.strong(label);
+                let label = {
+                    if *track_count == 1 {
+                        format!("{} (1 track)", playlist_title)
                     }
                     else {
-                        ui.strong("Select a playlist on the sidebar...");
+                        format!("{} ({} tracks)", playlist_title, track_count)
                     }
+                };
 
-                    if self.selected_playlist.is_some() && !self.is_playlist_ready() {
-                        ui.add(spinner::Spinner::new());
-                    }
-                });
+                ui.strong(label);
+            }
+            else {
+                ui.strong("Select a playlist on the sidebar...");
+            }
 
-                ui.separator();
+            if self.selected_playlist.is_some() && !self.is_playlist_ready() {
+                ui.add(spinner::Spinner::new());
+            }
+
+            ui.separator();
+
+            egui::ScrollArea::vertical().show(ui, | ui | {
                 ui.style_mut().wrap = Some(false);
 
                 ui.columns(4, | cols | {
