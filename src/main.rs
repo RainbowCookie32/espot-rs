@@ -251,136 +251,11 @@ impl EspotApp {
         });
 
         egui::SidePanel::left("side_panel").show(ctx, | ui | {
-            ui.separator();
-            ui.label("espot-rs");
-            ui.separator();
-
-            ui.collapsing("Playlists", | ui | {
-                if !self.playlists.is_empty() {
-                    for (i, (_, p)) in self.playlists.iter().enumerate() {
-                        if ui.selectable_label(false, &p.name).clicked() {
-                            if let Some(currently_selected) = self.selected_playlist.as_ref() {
-                                if i != *currently_selected {
-                                    self.selected_playlist = Some(i);
-                                    self.selected_playlist_tracks = Vec::with_capacity(p.tracks.len());
-                                    self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
-                                }
-                            }
-                            else {
-                                self.selected_playlist = Some(i);
-                                self.selected_playlist_tracks = Vec::with_capacity(p.tracks.len());
-                                self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
-                            }
-                        }
-                    }
-                }
-                else {
-                    ui.label("No playlists found...");
-                }
-            });
+            self.draw_side_panel(ui);
         });
 
         egui::CentralPanel::default().show(ctx, | ui | {
-            ui.horizontal(| ui | {
-                if let Some(idx) = self.selected_playlist.as_ref() {
-                    let (_, playlist) = &self.playlists[*idx];
-                    let track_count = playlist.tracks.len();
-                    let playlist_title = &playlist.name;
-    
-                    let label = {
-                        if track_count == 1 {
-                            format!("{} (1 track)", playlist_title)
-                        }
-                        else {
-                            format!("{} ({} tracks)", playlist_title, track_count)
-                        }
-                    };
-    
-                    ui.strong(label);
-                }
-                else {
-                    ui.strong("Select a playlist on the sidebar...");
-                }
-    
-                if self.selected_playlist.is_some() && !self.is_playlist_ready() {
-                    ui.add(spinner::Spinner::new());
-                }
-            });
-
-            ui.separator();
-
-            egui::ScrollArea::vertical().show(ui, | ui | {
-                ui.style_mut().wrap = Some(false);
-
-                let mut remove_track = None;
-                let mut start_playlist = None;
-
-                ui.columns(4, | cols | {
-                    cols[0].label("Title");
-                    cols[1].label("Artists");
-                    cols[2].label("Album");
-                    cols[3].label("Duration");
-
-                    for (track_idx, track) in self.selected_playlist_tracks.iter().enumerate() {
-                        let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
-
-                        let title_label = EspotApp::trim_string(cols[0].available_width(), glyph_width, track.name.clone());
-                        let artists_label = EspotApp::trim_string(cols[1].available_width(), glyph_width, EspotApp::make_artists_string(&track.artists));
-
-                        let album_label = EspotApp::trim_string(cols[2].available_width(), glyph_width, track.album_name.clone());
-                        let duration_label = EspotApp::trim_string(cols[3].available_width(), glyph_width, format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60));
-
-                        let track_name_label = cols[0].selectable_label(false, title_label);
-                        
-                        if track_name_label.clicked() {
-                            if self.is_playlist_ready() {
-                                self.paused = false;
-                                self.playback_started = true;
-    
-                                self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone()));
-                            }
-                        }
-
-                        track_name_label.context_menu(| ui | {
-                            if ui.selectable_label(false, "Play from here").clicked() {
-                                self.paused = false;
-                                self.playback_started = true;
-
-                                start_playlist = Some((self.selected_playlist_tracks.clone(), track.clone()));
-                                ui.close_menu();
-                            }
-
-                            if ui.selectable_label(false, "Remove from playlist").clicked() {
-                                if let Some(i) = self.selected_playlist.as_ref() {
-                                    let (id, _) = &self.playlists[*i];
-
-                                    remove_track = Some((id.clone(), track.id.clone(), track_idx));
-                                }
-
-                                ui.close_menu();
-                            }
-                        });
-
-                        let _ = cols[1].selectable_label(false, artists_label);
-                        let _ = cols[2].selectable_label(false, album_label);
-                        let _ = cols[3].selectable_label(false, duration_label);
-                    }
-                });
-
-                if let Some((playlist, track_id, track_idx)) = remove_track {
-                    self.fetching_playlists = true;
-                    self.selected_playlist_tracks.remove(track_idx);
-                    
-                    self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(playlist, track_id));
-                    self.send_worker_msg(WorkerTask::GetUserPlaylists);
-                }
-
-                if let Some((playlist, track)) = start_playlist {
-                    self.send_player_msg(PlayerControl::StartPlaylistAtTrack(playlist, track));
-                }
-
-                ui.style_mut().wrap = None;
-            });
+            self.draw_playlist_panel(ui);
         });
     }
 
@@ -445,6 +320,139 @@ impl EspotApp {
                     });
                 })
             });
+        });
+    }
+
+    fn draw_side_panel(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+            ui.label("espot-rs");
+            ui.separator();
+
+            ui.collapsing("Playlists", | ui | {
+                if !self.playlists.is_empty() {
+                    for (i, (_, p)) in self.playlists.iter().enumerate() {
+                        if ui.selectable_label(false, &p.name).clicked() {
+                            if let Some(currently_selected) = self.selected_playlist.as_ref() {
+                                if i != *currently_selected {
+                                    self.selected_playlist = Some(i);
+                                    self.selected_playlist_tracks = Vec::with_capacity(p.tracks.len());
+
+                                    self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
+                                }
+                            }
+                            else {
+                                self.selected_playlist = Some(i);
+                                self.selected_playlist_tracks = Vec::with_capacity(p.tracks.len());
+
+                                self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
+                            }
+                        }
+                    }
+                }
+                else {
+                    ui.label("No playlists found...");
+                }
+            });
+    }
+
+    fn draw_playlist_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(| ui | {
+            if let Some(idx) = self.selected_playlist.as_ref() {
+                let (_, playlist) = &self.playlists[*idx];
+
+                let label = {
+                    if playlist.tracks.len() == 1 {
+                        format!("{} (1 track)", &playlist.name)
+                    }
+                    else {
+                        format!("{} ({} tracks)", &playlist.name, playlist.tracks.len())
+                    }
+                };
+
+                ui.strong(label);
+            }
+            else {
+                ui.strong("Select a playlist on the sidebar...");
+            }
+
+            if self.selected_playlist.is_some() && !self.is_playlist_ready() {
+                ui.add(spinner::Spinner::new());
+            }
+        });
+
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, | ui | {
+            ui.style_mut().wrap = Some(false);
+
+            let mut remove_track = None;
+            let mut start_playlist = None;
+
+            ui.columns(4, | cols | {
+                cols[0].label("Title");
+                cols[1].label("Artists");
+                cols[2].label("Album");
+                cols[3].label("Duration");
+
+                for (track_idx, track) in self.selected_playlist_tracks.iter().enumerate() {
+                    let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
+
+                    let title_label = EspotApp::trim_string(cols[0].available_width(), glyph_width, track.name.clone());
+                    let artists_label = EspotApp::trim_string(cols[1].available_width(), glyph_width, EspotApp::make_artists_string(&track.artists));
+
+                    let album_label = EspotApp::trim_string(cols[2].available_width(), glyph_width, track.album_name.clone());
+                    let duration_label = EspotApp::trim_string(cols[3].available_width(), glyph_width, format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60));
+
+                    let track_name_label = cols[0].selectable_label(false, title_label);
+                    
+                    if track_name_label.clicked() {
+                        if self.is_playlist_ready() {
+                            self.paused = false;
+                            self.playback_started = true;
+
+                            self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone()));
+                        }
+                    }
+
+                    track_name_label.context_menu(| ui | {
+                        if ui.selectable_label(false, "Play from here").clicked() {
+                            self.paused = false;
+                            self.playback_started = true;
+
+                            start_playlist = Some((self.selected_playlist_tracks.clone(), track.clone()));
+                            ui.close_menu();
+                        }
+
+                        if ui.selectable_label(false, "Remove from playlist").clicked() {
+                            if let Some(i) = self.selected_playlist.as_ref() {
+                                let (id, _) = &self.playlists[*i];
+
+                                remove_track = Some((id.clone(), track.id.clone(), track_idx));
+                            }
+
+                            ui.close_menu();
+                        }
+                    });
+
+                    let _ = cols[1].selectable_label(false, artists_label);
+                    let _ = cols[2].selectable_label(false, album_label);
+                    let _ = cols[3].selectable_label(false, duration_label);
+                }
+            });
+
+            if let Some((playlist, track_id, track_idx)) = remove_track {
+                self.fetching_playlists = true;
+                self.selected_playlist_tracks.remove(track_idx);
+                
+                self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(playlist, track_id));
+                self.send_worker_msg(WorkerTask::GetUserPlaylists);
+            }
+
+            if let Some((playlist, track)) = start_playlist {
+                self.send_player_msg(PlayerControl::StartPlaylistAtTrack(playlist, track));
+            }
+
+            ui.style_mut().wrap = None;
         });
     }
 
