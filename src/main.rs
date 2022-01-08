@@ -371,11 +371,12 @@ impl EspotApp {
         egui::CentralPanel::default().show(ctx, | ui | {
             ui.horizontal(| ui | {
                 if let Some(idx) = self.selected_playlist.as_ref() {
-                    let track_count = &self.playlists[*idx].1.tracks.len();
-                    let playlist_title = &self.playlists[*idx].1.name;
+                    let (_, playlist) = &self.playlists[*idx];
+                    let track_count = playlist.tracks.len();
+                    let playlist_title = &playlist.name;
     
                     let label = {
-                        if *track_count == 1 {
+                        if track_count == 1 {
                             format!("{} (1 track)", playlist_title)
                         }
                         else {
