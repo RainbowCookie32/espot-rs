@@ -17,8 +17,8 @@ use librespot::core::authentication::Credentials;
 use librespot::playback::player::{Player, PlayerEvent};
 use librespot::metadata::{Playlist, Metadata};
 
-use rspotify::model::{Id, TrackId};
 use rspotify::auth_code::AuthCodeSpotify;
+use rspotify::model::{Id, TrackId, PlaylistId, PlayableId};
 use rspotify::clients::{OAuthClient, BaseClient};
 
 pub use cache::TrackInfo;
@@ -42,13 +42,15 @@ pub enum WorkerTask {
     Login(String, String),
     
     GetUserPlaylists,
-    GetPlaylistTracksInfo(Playlist)
+    GetPlaylistTracksInfo(Playlist),
+
+    RemoveTrackFromPlaylist(String, String)
 }
 
 #[derive(Debug)]
 pub enum WorkerResult {
     Login(bool),
-    Playlists(Vec<Playlist>),
+    Playlists(Vec<(String, Playlist)>),
     PlaylistTrackInfo(Vec<TrackInfo>)
 }
 
@@ -166,6 +168,9 @@ impl SpotifyWorker {
                     }
                     WorkerTask::GetPlaylistTracksInfo(playlist) => {
                         self.fetch_playlist_tracks_info_task(playlist).await;
+                    }
+                    WorkerTask::RemoveTrackFromPlaylist(playlist, track) => {
+                        self.remove_track_from_playlist_task(playlist, track).await;
                     }
                 }
             }
@@ -346,7 +351,7 @@ impl SpotifyWorker {
         (false, None)
     }
 
-    pub async fn fetch_playlists_task(&mut self) -> Vec<Playlist> {
+    pub async fn fetch_playlists_task(&mut self) -> Vec<(String, Playlist)> {
         let mut result = Vec::new();
 
         if let Some(client) = self.api_client.as_ref() {
@@ -358,7 +363,7 @@ impl SpotifyWorker {
                         let id = SpotifyId::from_uri(&playlist.id.to_string()).unwrap();
     
                         if let Ok(p) = Playlist::get(session, id).await {
-                            result.push(p);
+                            result.push((playlist.id.to_string(), p));
                         }
                     }
                     else {
@@ -452,6 +457,18 @@ impl SpotifyWorker {
 
             player.load(track_id, true, 0);
             self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
+        }
+    }
+
+    pub async fn remove_track_from_playlist_task(&mut self, playlist: String, track: String) {
+        if let Some(api_client) = self.api_client.as_mut() {
+            let playlist_id = PlaylistId::from_uri(&playlist).unwrap();
+            let track_id = TrackId::from_uri(&track).unwrap();
+            let track_ids: Vec<&dyn PlayableId> = vec![&track_id];
+
+            if let Err(e) = api_client.playlist_remove_all_occurrences_of_items(&playlist_id, track_ids, None).await {
+                println!("error removing track from playlist: {}", e.to_string());
+            }
         }
     }
 }

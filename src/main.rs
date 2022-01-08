@@ -22,7 +22,7 @@ pub struct EspotApp {
     login_password: String,
 
     #[serde(skip)]
-    playlists: Vec<Playlist>,
+    playlists: Vec<(String, Playlist)>,
     #[serde(skip)]
     fetching_playlists: bool,
 
@@ -339,7 +339,7 @@ impl EspotApp {
 
             ui.collapsing("Playlists", | ui | {
                 if !self.playlists.is_empty() {
-                    for (i, p) in self.playlists.iter().enumerate() {
+                    for (i, (_, p)) in self.playlists.iter().enumerate() {
                         if ui.selectable_label(false, &p.name).clicked() {
                             if let Some(currently_selected) = self.selected_playlist.as_ref() {
                                 if i != *currently_selected {
@@ -370,8 +370,8 @@ impl EspotApp {
 
         egui::CentralPanel::default().show(ctx, | ui | {
             if let Some(idx) = self.selected_playlist.as_ref() {
-                let track_count = &self.playlists[*idx].tracks.len();
-                let playlist_title = &self.playlists[*idx].name;
+                let track_count = &self.playlists[*idx].1.tracks.len();
+                let playlist_title = &self.playlists[*idx].1.name;
 
                 let label = {
                     if *track_count == 1 {
@@ -397,13 +397,15 @@ impl EspotApp {
             egui::ScrollArea::vertical().show(ui, | ui | {
                 ui.style_mut().wrap = Some(false);
 
+                let mut remove_track = None;
+
                 ui.columns(4, | cols | {
                     cols[0].label("Title");
                     cols[1].label("Artists");
                     cols[2].label("Album");
                     cols[3].label("Duration");
 
-                    for track in self.selected_playlist_tracks.iter() {
+                    for (track_idx, track) in self.selected_playlist_tracks.iter().enumerate() {
                         let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
 
                         let title_label = EspotApp::trim_string(cols[0].available_width(), glyph_width, track.name.clone());
@@ -423,8 +425,10 @@ impl EspotApp {
 
                         let album_label = EspotApp::trim_string(cols[2].available_width(), glyph_width, track.album_name.clone());
                         let duration_label = EspotApp::trim_string(cols[3].available_width(), glyph_width, format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60));
+
+                        let track_name_label = cols[0].selectable_label(false, title_label);
                         
-                        if cols[0].selectable_label(false, title_label).clicked() {
+                        if track_name_label.clicked() {
                             if self.is_playlist_ready() {
                                 if let Some(tx) = self.control_tx.as_ref() {
                                     self.paused = false;
@@ -435,11 +439,44 @@ impl EspotApp {
                             }
                         }
 
+                        track_name_label.context_menu(| ui | {
+                            if ui.selectable_label(false, "Play from here").clicked() {
+                                if let Some(tx) = self.control_tx.as_ref() {
+                                    self.paused = false;
+                                    self.playback_started = true;
+    
+                                    tx.send(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone())).unwrap();
+                                }
+
+                                ui.close_menu();
+                            }
+
+                            if ui.selectable_label(false, "Remove from playlist").clicked() {
+                                if let Some(tx) = self.worker_task_tx.as_ref() {
+                                    if let Some(i) = self.selected_playlist.as_ref() {
+                                        let (id, _) = &self.playlists[*i];
+
+                                        self.fetching_playlists = true;
+                                        remove_track = Some(track_idx);
+                                        
+                                        tx.send(WorkerTask::RemoveTrackFromPlaylist(id.clone(), track.id.clone())).unwrap();
+                                        tx.send(WorkerTask::GetUserPlaylists).unwrap();
+                                    }
+                                }
+
+                                ui.close_menu();
+                            }
+                        });
+
                         let _ = cols[1].selectable_label(false, artists_label);
                         let _ = cols[2].selectable_label(false, album_label);
                         let _ = cols[3].selectable_label(false, duration_label);
                     }
                 });
+
+                if let Some(track) = remove_track {
+                    self.selected_playlist_tracks.remove(track);
+                }
 
                 ui.style_mut().wrap = None;
             });
@@ -466,7 +503,7 @@ impl EspotApp {
 
     fn is_playlist_ready(&self) -> bool {
         if let Some(i) = self.selected_playlist.as_ref() {
-            if let Some(p) = self.playlists.get(*i) {
+            if let Some((_, p)) = self.playlists.get(*i) {
                 self.selected_playlist_tracks.len() == p.tracks.len()
             }
             else {
