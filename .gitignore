@@ -1,6 +1,8 @@
 /target
 
 .env
+*.otf
+*.xcf
 .spotify_token_cache.json
 
 espot-rs
