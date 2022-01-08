@@ -152,17 +152,15 @@ impl epi::App for EspotApp {
         }
 
         if self.logged_in {
-            self.main_screen(ctx);
+            self.draw_main_screen(ctx);
 
             if self.playlists.is_empty() && !self.fetching_playlists {
-                if let Some(tx) = self.worker_task_tx.as_ref() {
-                    tx.send(WorkerTask::GetUserPlaylists).unwrap();
-                    self.fetching_playlists = true;
-                }
+                self.fetching_playlists = true;
+                self.send_worker_msg(WorkerTask::GetUserPlaylists);
             }
         }
         else {
-            self.login_screen(ctx);
+            self.draw_login_screen(ctx);
         }
 
         if let Some(rx) = self.state_rx.as_mut() {
@@ -224,7 +222,7 @@ impl epi::App for EspotApp {
 }
 
 impl EspotApp {
-    fn login_screen(&mut self, ctx: &egui::CtxRef) {
+    fn draw_login_screen(&mut self, ctx: &egui::CtxRef) {
         egui::CentralPanel::default().show(ctx, | ui | {
             ui.vertical_centered(| ui | {
                 ui.heading("espot-rs");
@@ -241,95 +239,15 @@ impl EspotApp {
                 let submitted = (usr_field.lost_focus() || pwd_field.lost_focus()) && ui.input().key_pressed(egui::Key::Enter);
 
                 if ui.button("Log in").clicked() || submitted {
-                    if let Some(tx) = self.worker_task_tx.as_ref() {
-                        tx.send(WorkerTask::Login(self.login_username.clone(), self.login_password.clone())).unwrap();
-                    }
+                    self.send_worker_msg(WorkerTask::Login(self.login_username.clone(), self.login_password.clone()));
                 }
             });
         });
     }
 
-    fn main_screen(&mut self, ctx: &egui::CtxRef) {
+    fn draw_main_screen(&mut self, ctx: &egui::CtxRef) {
         egui::TopBottomPanel::bottom("playback_status").show(ctx, | ui | {
-            ui.horizontal(| ui | {
-                if let Some((size, id)) = self.texture_album_cover.as_ref() {
-                    ui.image(id.clone(), size.clone());
-                }
-                else if let Some((size, id)) = self.texture_no_cover.as_ref() {
-                    ui.image(id.clone(), size.clone());
-                }
-
-                ui.vertical(| ui | {
-                    ui.add_space(5.0);
-
-                    if let Some(track) = self.current_track.as_ref() {
-                        let artists_label = {
-                            let mut artists_label = String::new();
-
-                            for (i, artist) in track.artists.iter().enumerate() {
-                                artists_label.push_str(artist);
-
-                                if i != track.artists.len() - 1 {
-                                    artists_label.push_str(", ");
-                                }
-                            }
-
-                            artists_label
-                        };
-
-                        ui.heading(&track.name);
-                        ui.label(artists_label);
-                    }
-                    else {
-                        ui.heading("...");
-                        ui.label("...");
-                    }
-
-                    ui.add_space(5.0);
-                    
-                    ui.horizontal(| ui | {
-                        let can_move = self.playback_started;
-                        let can_start = self.is_playlist_ready();
-        
-                        ui.add_enabled_ui(can_move, | ui | {
-                            if ui.button("⏮").clicked() {
-                                if let Some(tx) = self.control_tx.as_ref() {
-                                    tx.send(PlayerControl::PreviousTrack).unwrap();
-                                }
-                            }
-                        });
-        
-                        ui.add_enabled_ui(can_start, | ui | {
-                            let button_label = if self.paused {"▶"} else {"⏸"};
-
-                            if ui.button(button_label).clicked() {
-                                if let Some(tx) = self.control_tx.as_ref() {
-                                    if !self.playback_started {
-                                        self.playback_started = true;
-                                        tx.send(PlayerControl::StartPlaylist(self.selected_playlist_tracks.clone())).unwrap();
-                                    }
-                                    else if self.paused {
-                                        tx.send(PlayerControl::Play).unwrap();
-                                    }
-                                    else {
-                                        tx.send(PlayerControl::Pause).unwrap();
-                                    }
-            
-                                    self.paused = !self.paused;
-                                }
-                            }
-                        });
-        
-                        ui.add_enabled_ui(can_move, | ui | {
-                            if ui.button("⏭").clicked() {
-                                if let Some(tx) = self.control_tx.as_ref() {
-                                    tx.send(PlayerControl::NextTrack).unwrap();
-                                }
-                            }
-                        });
-                    })
-                });
-            });
+            self.draw_playback_status(ui);
         });
 
         egui::SidePanel::left("side_panel").show(ctx, | ui | {
@@ -345,19 +263,13 @@ impl EspotApp {
                                 if i != *currently_selected {
                                     self.selected_playlist = Some(i);
                                     self.selected_playlist_tracks = Vec::with_capacity(p.tracks.len());
-
-                                    if let Some(tx) = self.worker_task_tx.as_ref() {
-                                        tx.send(WorkerTask::GetPlaylistTracksInfo(p.clone())).unwrap();
-                                    }
+                                    self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                                 }
                             }
                             else {
                                 self.selected_playlist = Some(i);
                                 self.selected_playlist_tracks = Vec::with_capacity(p.tracks.len());
-
-                                if let Some(tx) = self.worker_task_tx.as_ref() {
-                                    tx.send(WorkerTask::GetPlaylistTracksInfo(p.clone())).unwrap();
-                                }
+                                self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                             }
                         }
                     }
@@ -401,6 +313,7 @@ impl EspotApp {
                 ui.style_mut().wrap = Some(false);
 
                 let mut remove_track = None;
+                let mut start_playlist = None;
 
                 ui.columns(4, | cols | {
                     cols[0].label("Title");
@@ -412,19 +325,7 @@ impl EspotApp {
                         let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
 
                         let title_label = EspotApp::trim_string(cols[0].available_width(), glyph_width, track.name.clone());
-                        let artists_label = {
-                            let mut artists_label = String::new();
-
-                            for (i, artist) in track.artists.iter().enumerate() {
-                                artists_label.push_str(artist);
-
-                                if i != track.artists.len() - 1 {
-                                    artists_label.push_str(", ");
-                                }
-                            }
-
-                            EspotApp::trim_string(cols[1].available_width(), glyph_width, artists_label)
-                        };
+                        let artists_label = EspotApp::trim_string(cols[1].available_width(), glyph_width, EspotApp::make_artists_string(&track.artists));
 
                         let album_label = EspotApp::trim_string(cols[2].available_width(), glyph_width, track.album_name.clone());
                         let duration_label = EspotApp::trim_string(cols[3].available_width(), glyph_width, format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60));
@@ -433,38 +334,27 @@ impl EspotApp {
                         
                         if track_name_label.clicked() {
                             if self.is_playlist_ready() {
-                                if let Some(tx) = self.control_tx.as_ref() {
-                                    self.paused = false;
-                                    self.playback_started = true;
+                                self.paused = false;
+                                self.playback_started = true;
     
-                                    tx.send(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone())).unwrap();
-                                }
+                                self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone()));
                             }
                         }
 
                         track_name_label.context_menu(| ui | {
                             if ui.selectable_label(false, "Play from here").clicked() {
-                                if let Some(tx) = self.control_tx.as_ref() {
-                                    self.paused = false;
-                                    self.playback_started = true;
-    
-                                    tx.send(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone())).unwrap();
-                                }
+                                self.paused = false;
+                                self.playback_started = true;
 
+                                start_playlist = Some((self.selected_playlist_tracks.clone(), track.clone()));
                                 ui.close_menu();
                             }
 
                             if ui.selectable_label(false, "Remove from playlist").clicked() {
-                                if let Some(tx) = self.worker_task_tx.as_ref() {
-                                    if let Some(i) = self.selected_playlist.as_ref() {
-                                        let (id, _) = &self.playlists[*i];
+                                if let Some(i) = self.selected_playlist.as_ref() {
+                                    let (id, _) = &self.playlists[*i];
 
-                                        self.fetching_playlists = true;
-                                        remove_track = Some(track_idx);
-                                        
-                                        tx.send(WorkerTask::RemoveTrackFromPlaylist(id.clone(), track.id.clone())).unwrap();
-                                        tx.send(WorkerTask::GetUserPlaylists).unwrap();
-                                    }
+                                    remove_track = Some((id.clone(), track.id.clone(), track_idx));
                                 }
 
                                 ui.close_menu();
@@ -477,11 +367,83 @@ impl EspotApp {
                     }
                 });
 
-                if let Some(track) = remove_track {
-                    self.selected_playlist_tracks.remove(track);
+                if let Some((playlist, track_id, track_idx)) = remove_track {
+                    self.fetching_playlists = true;
+                    self.selected_playlist_tracks.remove(track_idx);
+                    
+                    self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(playlist, track_id));
+                    self.send_worker_msg(WorkerTask::GetUserPlaylists);
+                }
+
+                if let Some((playlist, track)) = start_playlist {
+                    self.send_player_msg(PlayerControl::StartPlaylistAtTrack(playlist, track));
                 }
 
                 ui.style_mut().wrap = None;
+            });
+        });
+    }
+
+    fn draw_playback_status(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(| ui | {
+            if let Some((size, id)) = self.texture_album_cover.as_ref() {
+                ui.image(id.clone(), size.clone());
+            }
+            else if let Some((size, id)) = self.texture_no_cover.as_ref() {
+                ui.image(id.clone(), size.clone());
+            }
+
+            ui.vertical(| ui | {
+                ui.add_space(5.0);
+
+                if let Some(track) = self.current_track.as_ref() {
+                    let artists_label = EspotApp::make_artists_string(&track.artists);
+
+                    ui.heading(&track.name);
+                    ui.label(artists_label);
+                }
+                else {
+                    ui.heading("...");
+                    ui.label("...");
+                }
+
+                ui.add_space(5.0);
+                
+                ui.horizontal(| ui | {
+                    let can_move = self.playback_started;
+                    let can_start = self.is_playlist_ready();
+    
+                    ui.add_enabled_ui(can_move, | ui | {
+                        if ui.button("⏮").clicked() {
+                            self.send_player_msg(PlayerControl::PreviousTrack);
+                        }
+                    });
+    
+                    ui.add_enabled_ui(can_start, | ui | {
+                        let button_label = if self.paused {"▶"} else {"⏸"};
+
+                        if ui.button(button_label).clicked() {
+                            if !self.playback_started {
+                                self.playback_started = true;
+                                self.send_player_msg(PlayerControl::StartPlaylist(self.selected_playlist_tracks.clone()));
+                            }
+                            else if self.paused {
+                                self.send_player_msg(PlayerControl::Play);
+                            }
+                            else {
+                                self.send_player_msg(PlayerControl::Pause);
+                            }
+    
+                            self.paused = !self.paused;
+                        }
+                    });
+    
+                    ui.add_enabled_ui(can_move, | ui | {
+                        if ui.button("⏭").clicked() {
+                            self.send_player_msg(PlayerControl::NextTrack);
+                        }
+                    });
+                })
             });
         });
     }
@@ -518,6 +480,18 @@ impl EspotApp {
         }
     }
 
+    fn send_worker_msg(&self, message: WorkerTask) {
+        if let Some(tx) = self.worker_task_tx.as_ref() {
+            tx.send(message).unwrap();
+        }
+    }
+
+    fn send_player_msg(&self, message: PlayerControl) {
+        if let Some(tx) = self.control_tx.as_ref() {
+            tx.send(message).unwrap();
+        }
+    }
+
     fn make_cover_image(buffer: &[u8], frame: &epi::Frame) -> Option<(egui::Vec2, egui::TextureId)> {
         if let Ok(image) = image::load_from_memory(buffer) {
             let image_buf = image.to_rgba8();
@@ -533,6 +507,20 @@ impl EspotApp {
         else {
             None
         }
+    }
+
+    fn make_artists_string(artists: &Vec<String>) -> String {
+        let mut result = String::new();
+
+        for (i, artist) in artists.iter().enumerate() {
+            result.push_str(artist);
+
+            if i != artists.len() - 1 {
+                result.push_str(", ");
+            }
+        }
+
+        result
     }
 }
 
