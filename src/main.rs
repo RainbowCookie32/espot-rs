@@ -369,28 +369,30 @@ impl EspotApp {
         });
 
         egui::CentralPanel::default().show(ctx, | ui | {
-            if let Some(idx) = self.selected_playlist.as_ref() {
-                let track_count = &self.playlists[*idx].1.tracks.len();
-                let playlist_title = &self.playlists[*idx].1.name;
-
-                let label = {
-                    if *track_count == 1 {
-                        format!("{} (1 track)", playlist_title)
-                    }
-                    else {
-                        format!("{} ({} tracks)", playlist_title, track_count)
-                    }
-                };
-
-                ui.strong(label);
-            }
-            else {
-                ui.strong("Select a playlist on the sidebar...");
-            }
-
-            if self.selected_playlist.is_some() && !self.is_playlist_ready() {
-                ui.add(spinner::Spinner::new());
-            }
+            ui.horizontal(| ui | {
+                if let Some(idx) = self.selected_playlist.as_ref() {
+                    let track_count = &self.playlists[*idx].1.tracks.len();
+                    let playlist_title = &self.playlists[*idx].1.name;
+    
+                    let label = {
+                        if *track_count == 1 {
+                            format!("{} (1 track)", playlist_title)
+                        }
+                        else {
+                            format!("{} ({} tracks)", playlist_title, track_count)
+                        }
+                    };
+    
+                    ui.strong(label);
+                }
+                else {
+                    ui.strong("Select a playlist on the sidebar...");
+                }
+    
+                if self.selected_playlist.is_some() && !self.is_playlist_ready() {
+                    ui.add(spinner::Spinner::new());
+                }
+            });
 
             ui.separator();
 
