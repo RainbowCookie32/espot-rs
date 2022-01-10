@@ -399,9 +399,20 @@ impl SpotifyWorker {
 
         while let Ok(item) = playlists.try_next().await {
             if let Some(playlist) = item {
-                let id = SpotifyId::from_uri(&playlist.id.to_string()).map_err(|_| error::WorkerError::BadSpotifyId)?;
+                let playlist_uri = playlist.id.uri();
+                let playlist_id = SpotifyId::from_uri(&playlist_uri).map_err(|_| error::WorkerError::BadSpotifyId)?;
 
-                if let Ok(p) = Playlist::get(session, id).await {
+                let images: Vec<(u32, String)> = playlist.images
+                    .iter()
+                    .map(| i | {
+                        (i.width.unwrap_or_default(), i.url.clone())
+                    })
+                    .collect()
+                ;
+
+                self.cache_cover_image(&playlist_uri, &images).await;
+
+                if let Ok(p) = Playlist::get(session, playlist_id).await {
                     result.push((playlist.id.to_string(), p));
                 }
             }
@@ -444,25 +455,8 @@ impl SpotifyWorker {
             for track in api_response {
                 if let Some(track) = TrackInfo::new(track) {
                     let album_id = &track.album_id;
-                    let cover_path = self.cache_dir.join(format!("cover-{}", album_id));
 
-                    if fs::File::open(&cover_path).await.is_err() {
-                        for (size, url) in track.album_images.iter() {
-                            if *size == 300 {
-                                if let Ok(res) = self.http_client.get(url).send().await {
-                                    let bytes = res.bytes().await.unwrap_or_default().to_vec();
-    
-                                    if !bytes.is_empty() {
-                                        if let Err(e) = fs::write(&cover_path, bytes).await {
-                                            println!("error writing cover file: {}", e.to_string());
-                                        }
-                                    }
-                                }
-    
-                                break;
-                            }
-                        }
-                    }
+                    self.cache_cover_image(album_id, &track.album_images).await;
                         
                     cache_dirty = true;
                     tracks.push(track.clone());
@@ -519,5 +513,27 @@ impl SpotifyWorker {
         let track_ids: Vec<&dyn PlayableId> = vec![&track_id];
         
         api_client.playlist_remove_all_occurrences_of_items(&playlist_id, track_ids, None).await.map(|_| Ok(()))?
+    }
+
+    async fn cache_cover_image(&self, id: &String, images: &Vec<(u32, String)>) {
+        let path = self.cache_dir.join(format!("cover-{}", id));
+
+        if fs::File::open(&path).await.is_err() {
+            for (size, url) in images.iter() {
+                if *size == 300 {
+                    if let Ok(res) = self.http_client.get(url).send().await {
+                        let bytes = res.bytes().await.unwrap_or_default().to_vec();
+
+                        if !bytes.is_empty() {
+                            if let Err(e) = fs::write(&path, bytes).await {
+                                println!("error writing cover file: {}", e.to_string());
+                            }
+                        }
+                    }
+
+                    break;
+                }
+            }
+        }
     }
 }
