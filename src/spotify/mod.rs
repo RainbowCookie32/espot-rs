@@ -419,43 +419,55 @@ impl SpotifyWorker {
         let mut cache_dirty = false;
         let mut tracks = Vec::with_capacity(playlist.tracks.len());
 
-        for track_id in playlist.tracks {
-            let track_uri = track_id.to_uri();
+        let tracks_to_fetch: Vec<TrackId> = playlist.tracks.into_iter()
+            // Only fetch tracks with a valid Spotify ID.
+            .filter_map(| id | {
+                TrackId::from_uri(&id.to_uri()).ok()
+            })
+            // And filter out the tracks that we already have cached.
+            .filter(| track | {
+                if let Some(track) = self.api_cache.get(&track.uri()) {
+                    tracks.push(track.clone());
+                    false
+                }
+                else {
+                    true
+                }
+            })
+            .collect()
+        ;
 
-            if let Some(track) = self.api_cache.get(&track_uri) {
-                tracks.push(track.clone());
-            }
-            else {
-                let track_id = TrackId::from_uri(&track_uri).map_err(|_| error::WorkerError::BadSpotifyId)?;
+        // The tracks endpoint accepts a maximum of 50 tracks at a time.
+        for tracks_batch in tracks_to_fetch.chunks(50) {
+            let api_response = client.tracks(&tracks_batch.to_vec(), None).await?;
 
-                if let Ok(track) = client.track(&track_id).await {
-                    if let Some(track) = TrackInfo::new(track) {
-                        let album_id = &track.album_id;
-                        let cover_path = self.cache_dir.join(format!("cover-{}", album_id));
+            for track in api_response {
+                if let Some(track) = TrackInfo::new(track) {
+                    let album_id = &track.album_id;
+                    let cover_path = self.cache_dir.join(format!("cover-{}", album_id));
 
-                        if fs::File::open(&cover_path).await.is_err() {
-                            for (size, url) in track.album_images.iter() {
-                                if *size == 300 {
-                                    if let Ok(res) = self.http_client.get(url).send().await {
-                                        let bytes = res.bytes().await.unwrap_or_default().to_vec();
-        
-                                        if !bytes.is_empty() {
-                                            if let Err(e) = fs::write(&cover_path, bytes).await {
-                                                println!("error writing cover file: {}", e.to_string());
-                                            }
+                    if fs::File::open(&cover_path).await.is_err() {
+                        for (size, url) in track.album_images.iter() {
+                            if *size == 300 {
+                                if let Ok(res) = self.http_client.get(url).send().await {
+                                    let bytes = res.bytes().await.unwrap_or_default().to_vec();
+    
+                                    if !bytes.is_empty() {
+                                        if let Err(e) = fs::write(&cover_path, bytes).await {
+                                            println!("error writing cover file: {}", e.to_string());
                                         }
                                     }
-        
-                                    break;
                                 }
+    
+                                break;
                             }
                         }
-                            
-                        cache_dirty = true;
-                        tracks.push(track.clone());
-
-                        self.api_cache.insert(track_id.uri(), track);
                     }
+                        
+                    cache_dirty = true;
+                    tracks.push(track.clone());
+
+                    self.api_cache.insert(track.id.clone(), track);
                 }
             }
         }
