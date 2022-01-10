@@ -11,6 +11,17 @@ use librespot::metadata::Playlist;
 
 use spotify::*;
 
+enum CurrentPanel {
+    Home,
+    Playlist
+}
+
+impl Default for CurrentPanel {
+    fn default() -> CurrentPanel {
+        CurrentPanel::Home
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct EspotApp {
     #[serde(skip)]
@@ -19,6 +30,9 @@ pub struct EspotApp {
     login_username: String,
     #[serde(skip)]
     login_password: String,
+
+    #[serde(skip)]
+    current_panel: CurrentPanel,
 
     #[serde(skip)]
     playlists: Vec<(String, Playlist)>,
@@ -51,7 +65,9 @@ pub struct EspotApp {
     #[serde(skip)]
     texture_no_cover: Option<(egui::Vec2, egui::TextureId)>,
     #[serde(skip)]
-    texture_album_cover: Option<(egui::Vec2, egui::TextureId)>
+    texture_album_cover: Option<(egui::Vec2, egui::TextureId)>,
+    #[serde(skip)]
+    textures_playlist_covers: Vec<Option<(egui::Vec2, egui::TextureId)>>
 }
 
 impl Default for EspotApp {
@@ -63,6 +79,8 @@ impl Default for EspotApp {
 
             login_username: String::new(),
             login_password: String::new(),
+
+            current_panel: CurrentPanel::Home,
 
             playlists: Vec::new(),
             fetching_playlists: false,
@@ -82,7 +100,8 @@ impl Default for EspotApp {
             worker_result_rx: Some(worker_result_rx),
 
             texture_no_cover: None,
-            texture_album_cover: None
+            texture_album_cover: None,
+            textures_playlist_covers: Vec::new()
         }
     }
 }
@@ -150,6 +169,17 @@ impl epi::App for EspotApp {
             }
         }
 
+        for i in 0..self.textures_playlist_covers.len() {
+            if self.textures_playlist_covers[i].is_none() {
+                let (playlist_id, _) = &self.playlists[i];
+                let cover_path = dirs::cache_dir().unwrap().join(format!("espot-rs/cover-{}", playlist_id));
+
+                if let Ok(buffer) = std::fs::read(cover_path) {
+                    self.textures_playlist_covers[i] = EspotApp::make_cover_image(&buffer, frame);
+                }
+            }
+        }
+
         if self.logged_in {
             self.draw_main_screen(ctx);
 
@@ -205,6 +235,7 @@ impl epi::App for EspotApp {
                     WorkerResult::Playlists(playlists) => {
                         self.playlists = playlists;
                         self.fetching_playlists = false;
+                        self.textures_playlist_covers = vec![None; self.playlists.len()];
                     }
                     WorkerResult::PlaylistTrackInfo(tracks) => {
                         self.selected_playlist_tracks = tracks;
@@ -253,7 +284,10 @@ impl EspotApp {
         });
 
         egui::CentralPanel::default().show(ctx, | ui | {
-            self.draw_playlist_panel(ui);
+            match &self.current_panel {
+                CurrentPanel::Home => self.draw_home_panel(ui),
+                CurrentPanel::Playlist => self.draw_playlist_panel(ui)
+            }
         });
     }
 
@@ -326,6 +360,10 @@ impl EspotApp {
             ui.label("espot-rs");
             ui.separator();
 
+            if ui.selectable_label(false, "Home").clicked() {
+                self.current_panel = CurrentPanel::Home;
+            }
+
             ui.collapsing("Playlists", | ui | {
                 if !self.playlists.is_empty() {
                     for (i, (_, p)) in self.playlists.iter().enumerate() {
@@ -351,6 +389,61 @@ impl EspotApp {
                     ui.label("No playlists found...");
                 }
             });
+    }
+
+    fn draw_home_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(| ui | {
+            ui.heading("Your playlists");
+
+            if self.fetching_playlists {
+                ui.add(spinner::Spinner::new());
+            }
+        });
+
+        ui.separator();
+
+        egui::ScrollArea::horizontal().show(ui, | ui | {
+            ui.horizontal(| ui | {
+                for (i, (_, playlist)) in self.playlists.iter().enumerate() {
+                    let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
+
+                    if let Some(t) = self.textures_playlist_covers.get(i) {
+                        if let Some((size, id)) = t {
+                            let button = egui::ImageButton::new(*id, *size).tint(tint);
+                            let button = ui.add(button);
+
+                            let text = egui::RichText::new(&playlist.name).strong();
+                            let label = ui.put(button.rect, egui::Label::new(text));
+
+                            if button.clicked() || label.clicked() {
+                                self.current_panel = CurrentPanel::Playlist;
+
+                                self.selected_playlist = Some(i);
+                                self.selected_playlist_tracks = Vec::with_capacity(playlist.tracks.len());
+                                self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(playlist.clone()));
+                            }
+                        }
+                    }
+                    else if let Some((size, id)) = self.texture_no_cover.as_ref() {
+                        let button = egui::ImageButton::new(*id, *size).tint(tint);
+                        let button = ui.add(button);
+
+                        let text = egui::RichText::new(&playlist.name).strong();
+                        let label = ui.put(button.rect, egui::Label::new(text));
+
+                        if button.clicked() || label.clicked() {
+                            self.current_panel = CurrentPanel::Playlist;
+
+                            self.selected_playlist = Some(i);
+                            self.selected_playlist_tracks = Vec::with_capacity(playlist.tracks.len());
+                            self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(playlist.clone()));
+                        }
+                    }
+                }
+            });
+        });
+
+        ui.separator();
     }
 
     fn draw_playlist_panel(&mut self, ui: &mut egui::Ui) {
