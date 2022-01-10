@@ -17,12 +17,13 @@ use librespot::core::config::SessionConfig;
 use librespot::core::spotify_id::SpotifyId;
 use librespot::core::authentication::Credentials;
 
+use librespot::playback::config;
 use librespot::playback::player::{Player, PlayerEvent};
-use librespot::metadata::{Playlist, Metadata};
 
 use rspotify::auth_code::AuthCodeSpotify;
-use rspotify::model::{Id, TrackId, PlaylistId, PlayableId};
+use librespot::metadata::{Playlist, Metadata};
 use rspotify::clients::{OAuthClient, BaseClient};
+use rspotify::model::{Id, TrackId, PlaylistId, PlayableId};
 
 pub use cache::TrackInfo;
 
@@ -115,7 +116,7 @@ impl SpotifyWorker {
 
         let state_rx_2 = state_tx.subscribe();
 
-        if let Err(err) = std::fs::create_dir_all(&cache_dir) {
+        if let Err(err) = std::fs::create_dir_all(&cache_dir.join("audio")) {
             match err.kind() {
                 std::io::ErrorKind::AlreadyExists => {},
                 _ => panic!("failed to create cache directory")
@@ -357,11 +358,24 @@ impl SpotifyWorker {
         let url = api_client.get_authorize_url(false).unwrap_or_default();
         
         if api_client.prompt_for_token(&url).await.is_ok() {
-            let player_cfg = librespot::playback::config::PlayerConfig::default();
-            let session = Session::connect(session_cfg, session_creds, None).await?;
+            let player_cfg = config::PlayerConfig {
+                gapless: true,
+                normalisation_type: config::NormalisationType::Auto,
+                normalisation_method: config::NormalisationMethod::Dynamic,
+                ..Default::default()
+            };
+
+            let cache = {
+                let system_location = Some(self.cache_dir.join("system"));
+                let audio_location = Some(self.cache_dir.join("audio"));
+                
+                librespot::core::cache::Cache::new(system_location, audio_location, None).ok()
+            };
+            
+            let session = Session::connect(session_cfg, session_creds, cache).await?;
 
             let (player, rx) = Player::new(player_cfg, session.clone(), None, move || {
-                librespot::playback::audio_backend::find(None).unwrap()(None, librespot::playback::config::AudioFormat::default())
+                librespot::playback::audio_backend::find(None).unwrap()(None, config::AudioFormat::default())
             });
 
             self.api_client = Some(api_client);
