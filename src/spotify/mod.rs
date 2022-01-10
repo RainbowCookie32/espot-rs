@@ -438,7 +438,10 @@ impl SpotifyWorker {
             // And filter out the tracks that we already have cached.
             .filter(| track | {
                 if let Some(track) = self.api_cache.get(&track.uri()) {
+                    // This should already be there, but making sure never killed anyone.
+                    futures_lite::future::block_on(self.cache_cover_image(&track.album_id, &track.album_images));
                     tracks.push(track.clone());
+
                     false
                 }
                 else {
