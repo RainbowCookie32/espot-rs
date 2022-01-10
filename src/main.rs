@@ -16,7 +16,6 @@ pub struct EspotApp {
     #[serde(skip)]
     logged_in: bool,
 
-    #[serde(skip)]
     login_username: String,
     #[serde(skip)]
     login_password: String,
@@ -199,7 +198,6 @@ impl epi::App for EspotApp {
                     WorkerResult::Login(result) => {
                         if result {
                             self.logged_in = true;
-                            self.login_username = String::new();
                         }
     
                         self.login_password = String::new();
