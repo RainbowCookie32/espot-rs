@@ -48,6 +48,7 @@ pub enum WorkerTask {
     Login(String, String),
     
     GetUserPlaylists,
+    GetFeaturedPlaylists,
     GetPlaylistTracksInfo(Playlist),
 
     RemoveTrackFromPlaylist(String, String)
@@ -56,7 +57,10 @@ pub enum WorkerTask {
 #[derive(Debug)]
 pub enum WorkerResult {
     Login(bool),
-    Playlists(Vec<(String, Playlist)>),
+
+    UserPlaylists(Vec<(String, Playlist)>),
+    FeaturedPlaylists(Vec<(String, Playlist)>),
+
     PlaylistTrackInfo(Vec<TrackInfo>)
 }
 
@@ -176,9 +180,15 @@ impl SpotifyWorker {
                         self.worker_result_tx.send(WorkerResult::Login(result)).unwrap();
                     }
                     WorkerTask::GetUserPlaylists => {
-                        if let Ok(result) = self.fetch_playlists_task().await {
+                        if let Ok(result) = self.fetch_user_playlists_task().await {
                             // TODO: Pass the error to the UI and show to user.
-                            self.worker_result_tx.send(WorkerResult::Playlists(result)).unwrap();
+                            self.worker_result_tx.send(WorkerResult::UserPlaylists(result)).unwrap();
+                        }
+                    }
+                    WorkerTask::GetFeaturedPlaylists => {
+                        if let Ok(result) = self.fetch_featured_playlists_task().await {
+                            // TODO: Pass the error to the UI and show to user.
+                            self.worker_result_tx.send(WorkerResult::FeaturedPlaylists(result)).unwrap();
                         }
                     }
                     WorkerTask::GetPlaylistTracksInfo(playlist) => {
@@ -389,7 +399,7 @@ impl SpotifyWorker {
         }
     }
 
-    pub async fn fetch_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {
+    pub async fn fetch_user_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {
         let mut result = Vec::new();
         
         let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
@@ -418,6 +428,38 @@ impl SpotifyWorker {
             }
             else {
                 break;
+            }
+        }
+
+        Ok(result)
+    }
+
+    pub async fn fetch_featured_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {
+        let mut result = Vec::new();
+        
+        let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
+        let session = self.spotify_session.as_ref().ok_or(error::WorkerError::NoSpotifySession)?;
+
+        let playlists = client.featured_playlists(None, None, None, None, None).await;
+
+        if let Ok(item) = playlists {
+            for playlist in item.playlists.items {
+                let playlist_uri = playlist.id.uri();
+                let playlist_id = SpotifyId::from_uri(&playlist_uri).map_err(|_| error::WorkerError::BadSpotifyId)?;
+
+                let images: Vec<(u32, String)> = playlist.images
+                    .iter()
+                    .map(| i | {
+                        (i.width.unwrap_or_default(), i.url.clone())
+                    })
+                    .collect()
+                ;
+
+                self.cache_cover_image(&playlist_uri, &images).await;
+
+                if let Ok(p) = Playlist::get(session, playlist_id).await {
+                    result.push((playlist.id.to_string(), p));
+                }
             }
         }
 
@@ -523,7 +565,9 @@ impl SpotifyWorker {
 
         if fs::File::open(&path).await.is_err() {
             for (size, url) in images.iter() {
-                if *size == 300 {
+                // Spotify doesn't include size data for some images for some reason,
+                // so because of uwrap_or_default(), a properly sized image might be 0 here.
+                if *size == 0 || *size == 300 {
                     if let Ok(res) = self.http_client.get(url).send().await {
                         let bytes = res.bytes().await.unwrap_or_default().to_vec();
 

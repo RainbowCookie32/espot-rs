@@ -35,9 +35,14 @@ pub struct EspotApp {
     current_panel: CurrentPanel,
 
     #[serde(skip)]
-    playlists: Vec<(String, Playlist)>,
+    user_playlists: Vec<(String, Playlist)>,
     #[serde(skip)]
-    fetching_playlists: bool,
+    featured_playlists: Vec<(String, Playlist)>,
+
+    #[serde(skip)]
+    fetching_user_playlists: bool,
+    #[serde(skip)]
+    fetching_featured_playlists: bool,
 
     #[serde(skip)]
     paused: bool,
@@ -66,8 +71,11 @@ pub struct EspotApp {
     texture_no_cover: Option<(egui::Vec2, egui::TextureId)>,
     #[serde(skip)]
     texture_album_cover: Option<(egui::Vec2, egui::TextureId)>,
+    
     #[serde(skip)]
-    textures_playlist_covers: Vec<Option<(egui::Vec2, egui::TextureId)>>
+    textures_user_playlists_covers: Vec<Option<(egui::Vec2, egui::TextureId)>>,
+    #[serde(skip)]
+    textures_featured_playlists_covers: Vec<Option<(egui::Vec2, egui::TextureId)>>
 }
 
 impl Default for EspotApp {
@@ -82,8 +90,11 @@ impl Default for EspotApp {
 
             current_panel: CurrentPanel::Home,
 
-            playlists: Vec::new(),
-            fetching_playlists: false,
+            user_playlists: Vec::new(),
+            featured_playlists: Vec::new(),
+
+            fetching_user_playlists: false,
+            fetching_featured_playlists: false,
 
             paused: true,
             playback_started: false,
@@ -101,7 +112,9 @@ impl Default for EspotApp {
 
             texture_no_cover: None,
             texture_album_cover: None,
-            textures_playlist_covers: Vec::new()
+
+            textures_user_playlists_covers: Vec::new(),
+            textures_featured_playlists_covers: Vec::new()
         }
     }
 }
@@ -169,13 +182,24 @@ impl epi::App for EspotApp {
             }
         }
 
-        for i in 0..self.textures_playlist_covers.len() {
-            if self.textures_playlist_covers[i].is_none() {
-                let (playlist_id, _) = &self.playlists[i];
+        for i in 0..self.textures_user_playlists_covers.len() {
+            if self.textures_user_playlists_covers[i].is_none() {
+                let (playlist_id, _) = &self.user_playlists[i];
                 let cover_path = dirs::cache_dir().unwrap().join(format!("espot-rs/cover-{}", playlist_id));
 
                 if let Ok(buffer) = std::fs::read(cover_path) {
-                    self.textures_playlist_covers[i] = EspotApp::make_cover_image(&buffer, frame);
+                    self.textures_user_playlists_covers[i] = EspotApp::make_cover_image(&buffer, frame);
+                }
+            }
+        }
+
+        for i in 0..self.textures_featured_playlists_covers.len() {
+            if self.textures_featured_playlists_covers[i].is_none() {
+                let (playlist_id, _) = &self.featured_playlists[i];
+                let cover_path = dirs::cache_dir().unwrap().join(format!("espot-rs/cover-{}", playlist_id));
+
+                if let Ok(buffer) = std::fs::read(cover_path) {
+                    self.textures_featured_playlists_covers[i] = EspotApp::make_cover_image(&buffer, frame);
                 }
             }
         }
@@ -183,9 +207,14 @@ impl epi::App for EspotApp {
         if self.logged_in {
             self.draw_main_screen(ctx);
 
-            if self.playlists.is_empty() && !self.fetching_playlists {
-                self.fetching_playlists = true;
+            if self.user_playlists.is_empty() && !self.fetching_user_playlists {
+                self.fetching_user_playlists = true;
                 self.send_worker_msg(WorkerTask::GetUserPlaylists);
+            }
+
+            if self.featured_playlists.is_empty() && !self.fetching_featured_playlists {
+                self.fetching_featured_playlists = true;
+                self.send_worker_msg(WorkerTask::GetFeaturedPlaylists);
             }
         }
         else {
@@ -232,10 +261,17 @@ impl epi::App for EspotApp {
     
                         self.login_password = String::new();
                     }
-                    WorkerResult::Playlists(playlists) => {
-                        self.playlists = playlists;
-                        self.fetching_playlists = false;
-                        self.textures_playlist_covers = vec![None; self.playlists.len()];
+                    WorkerResult::UserPlaylists(playlists) => {
+                        self.user_playlists = playlists;
+                        self.fetching_user_playlists = false;
+                        // FIXME: Might be a good idea to iterate through this vec and free all textures.
+                        self.textures_user_playlists_covers = vec![None; self.user_playlists.len()];
+                    }
+                    WorkerResult::FeaturedPlaylists(playlists) => {
+                        self.featured_playlists = playlists;
+                        self.fetching_featured_playlists = false;
+                        // FIXME: Might be a good idea to iterate through this vec and free all textures.
+                        self.textures_featured_playlists_covers = vec![None; self.featured_playlists.len()];
                     }
                     WorkerResult::PlaylistTrackInfo(tracks) => {
                         self.selected_playlist_tracks = tracks;
@@ -365,8 +401,8 @@ impl EspotApp {
             }
 
             ui.collapsing("Playlists", | ui | {
-                if !self.playlists.is_empty() {
-                    for (i, (_, p)) in self.playlists.iter().enumerate() {
+                if !self.user_playlists.is_empty() {
+                    for (i, (_, p)) in self.user_playlists.iter().enumerate() {
                         if ui.selectable_label(false, &p.name).clicked() {
                             if let Some(currently_selected) = self.selected_playlist.as_ref() {
                                 if i != *currently_selected {
@@ -395,19 +431,19 @@ impl EspotApp {
         ui.horizontal(| ui | {
             ui.heading("Your playlists");
 
-            if self.fetching_playlists {
+            if self.fetching_user_playlists {
                 ui.add(spinner::Spinner::new());
             }
         });
 
         ui.separator();
 
-        egui::ScrollArea::horizontal().show(ui, | ui | {
+        egui::ScrollArea::horizontal().id_source("user_playlists_scroll").show(ui, | ui | {
             ui.horizontal(| ui | {
-                for (i, (_, playlist)) in self.playlists.iter().enumerate() {
+                for (i, (_, playlist)) in self.user_playlists.iter().enumerate() {
                     let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
 
-                    if let Some(t) = self.textures_playlist_covers.get(i) {
+                    if let Some(t) = self.textures_user_playlists_covers.get(i) {
                         if let Some((size, id)) = t {
                             let button = egui::ImageButton::new(*id, *size).tint(tint);
                             let button = ui.add(button);
@@ -443,13 +479,56 @@ impl EspotApp {
             });
         });
 
+        ui.add_space(20.0);
+
+        ui.horizontal(| ui | {
+            ui.heading("Featured by Spotify");
+
+            if self.fetching_featured_playlists {
+                ui.add(spinner::Spinner::new());
+            }
+        });
+
         ui.separator();
+
+        egui::ScrollArea::horizontal().id_source("spotify_featured_scroll").show(ui, | ui | {
+            ui.horizontal(| ui | {
+                for (i, (_, playlist)) in self.featured_playlists.iter().enumerate() {
+                    let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
+
+                    if let Some(t) = self.textures_featured_playlists_covers.get(i) {
+                        if let Some((size, id)) = t {
+                            let button = egui::ImageButton::new(*id, *size).tint(tint);
+                            let button = ui.add(button);
+
+                            let text = egui::RichText::new(&playlist.name).strong();
+                            let label = ui.put(button.rect, egui::Label::new(text));
+
+                            if button.clicked() || label.clicked() {
+                                
+                            }
+                        }
+                    }
+                    else if let Some((size, id)) = self.texture_no_cover.as_ref() {
+                        let button = egui::ImageButton::new(*id, *size).tint(tint);
+                        let button = ui.add(button);
+
+                        let text = egui::RichText::new(&playlist.name).strong();
+                        let label = ui.put(button.rect, egui::Label::new(text));
+
+                        if button.clicked() || label.clicked() {
+                            
+                        }
+                    }
+                }
+            });
+        });
     }
 
     fn draw_playlist_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
             if let Some(idx) = self.selected_playlist.as_ref() {
-                let (_, playlist) = &self.playlists[*idx];
+                let (_, playlist) = &self.user_playlists[*idx];
 
                 let label = {
                     if playlist.tracks.len() == 1 {
@@ -516,7 +595,7 @@ impl EspotApp {
 
                         if ui.selectable_label(false, "Remove from playlist").clicked() {
                             if let Some(i) = self.selected_playlist.as_ref() {
-                                let (id, _) = &self.playlists[*i];
+                                let (id, _) = &self.user_playlists[*i];
 
                                 remove_track = Some((id.clone(), track.id.clone(), track_idx));
                             }
@@ -532,7 +611,7 @@ impl EspotApp {
             });
 
             if let Some((playlist, track_id, track_idx)) = remove_track {
-                self.fetching_playlists = true;
+                self.fetching_user_playlists = true;
                 self.selected_playlist_tracks.remove(track_idx);
                 
                 self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(playlist, track_id));
@@ -567,7 +646,7 @@ impl EspotApp {
 
     fn is_playlist_ready(&self) -> bool {
         if let Some(i) = self.selected_playlist.as_ref() {
-            if let Some((_, p)) = self.playlists.get(*i) {
+            if let Some((_, p)) = self.user_playlists.get(*i) {
                 self.selected_playlist_tracks.len() == p.tracks.len()
             }
             else {
