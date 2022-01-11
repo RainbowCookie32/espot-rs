@@ -418,6 +418,8 @@ impl EspotApp {
 
                                 self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                             }
+
+                            self.current_panel = CurrentPanel::Playlist;
                         }
                     }
                 }
