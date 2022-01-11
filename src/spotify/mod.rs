@@ -563,7 +563,7 @@ impl SpotifyWorker {
     async fn cache_cover_image(&self, id: &String, images: &Vec<(u32, String)>) {
         let path = self.cache_dir.join(format!("cover-{}", id));
 
-        if fs::File::open(&path).await.is_err() {
+        if !path.exists() {
             for (size, url) in images.iter() {
                 // Spotify doesn't include size data for some images for some reason,
                 // so because of uwrap_or_default(), a properly sized image might be 0 here.
