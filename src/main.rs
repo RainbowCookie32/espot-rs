@@ -2,6 +2,8 @@ mod dbus;
 mod spotify;
 mod spinner;
 
+use std::path::PathBuf;
+
 use eframe::{egui, epi};
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
@@ -30,6 +32,9 @@ pub struct EspotApp {
     login_username: String,
     #[serde(skip)]
     login_password: String,
+
+    #[serde(skip)]
+    cache_path: PathBuf,
 
     #[serde(skip)]
     current_panel: CurrentPanel,
@@ -80,6 +85,7 @@ pub struct EspotApp {
 
 impl Default for EspotApp {
     fn default() -> EspotApp {
+        let cache_path = dirs::cache_dir().unwrap().join("espot-rs");
         let (worker_task_tx, worker_result_rx, state_rx, _, control_tx) = SpotifyWorker::start();
 
         EspotApp {
@@ -87,6 +93,8 @@ impl Default for EspotApp {
 
             login_username: String::new(),
             login_password: String::new(),
+
+            cache_path,
 
             current_panel: CurrentPanel::Home,
 
@@ -174,7 +182,7 @@ impl epi::App for EspotApp {
         if let Some(track) = self.current_track.as_ref() {
             if self.texture_album_cover.is_none() {
                 let album_id = &track.album_id;
-                let cover_path = dirs::cache_dir().unwrap().join(format!("espot-rs/cover-{}", album_id));
+                let cover_path = self.cache_path.join(format!("cover-{}", album_id));
 
                 if let Ok(buffer) = std::fs::read(cover_path) {
                     self.texture_album_cover = EspotApp::make_cover_image(&buffer, frame);
@@ -185,7 +193,7 @@ impl epi::App for EspotApp {
         for i in 0..self.textures_user_playlists_covers.len() {
             if self.textures_user_playlists_covers[i].is_none() {
                 let (playlist_id, _) = &self.user_playlists[i];
-                let cover_path = dirs::cache_dir().unwrap().join(format!("espot-rs/cover-{}", playlist_id));
+                let cover_path = self.cache_path.join(format!("cover-{}", playlist_id));
 
                 if let Ok(buffer) = std::fs::read(cover_path) {
                     self.textures_user_playlists_covers[i] = EspotApp::make_cover_image(&buffer, frame);
@@ -196,7 +204,7 @@ impl epi::App for EspotApp {
         for i in 0..self.textures_featured_playlists_covers.len() {
             if self.textures_featured_playlists_covers[i].is_none() {
                 let (playlist_id, _) = &self.featured_playlists[i];
-                let cover_path = dirs::cache_dir().unwrap().join(format!("espot-rs/cover-{}", playlist_id));
+                let cover_path = self.cache_path.join(format!("cover-{}", playlist_id));
 
                 if let Ok(buffer) = std::fs::read(cover_path) {
                     self.textures_featured_playlists_covers[i] = EspotApp::make_cover_image(&buffer, frame);
@@ -264,13 +272,25 @@ impl epi::App for EspotApp {
                     WorkerResult::UserPlaylists(playlists) => {
                         self.user_playlists = playlists;
                         self.fetching_user_playlists = false;
-                        // FIXME: Might be a good idea to iterate through this vec and free all textures.
+                        
+                        for texture_data in self.textures_user_playlists_covers.iter() {
+                            if let Some((_, id)) = texture_data {
+                                frame.free_texture(*id);
+                            }
+                        }
+                        
                         self.textures_user_playlists_covers = vec![None; self.user_playlists.len()];
                     }
                     WorkerResult::FeaturedPlaylists(playlists) => {
                         self.featured_playlists = playlists;
                         self.fetching_featured_playlists = false;
-                        // FIXME: Might be a good idea to iterate through this vec and free all textures.
+                        
+                        for texture_data in self.textures_featured_playlists_covers.iter() {
+                            if let Some((_, id)) = texture_data {
+                                frame.free_texture(*id);
+                            }
+                        }
+
                         self.textures_featured_playlists_covers = vec![None; self.featured_playlists.len()];
                     }
                     WorkerResult::PlaylistTrackInfo(tracks) => {
