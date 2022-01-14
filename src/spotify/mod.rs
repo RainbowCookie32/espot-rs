@@ -192,12 +192,12 @@ impl SpotifyWorker {
                         }
                     }
                     WorkerTask::GetPlaylistTracksInfo(playlist) => {
-                        if let Err(_) = self.fetch_playlist_tracks_info_task(playlist).await {
+                        if self.fetch_playlist_tracks_info_task(playlist).await.is_err() {
                             // TODO: Pass the error to the UI and show to user.
                         }
                     }
                     WorkerTask::RemoveTrackFromPlaylist(playlist, track) => {
-                        if let Err(_) = self.remove_track_from_playlist_task(playlist, track).await {
+                        if self.remove_track_from_playlist_task(playlist, track).await.is_err() {
                             // TODO: Pass the error to the UI and show to user.
                         }
                     }
@@ -239,7 +239,7 @@ impl SpotifyWorker {
                     PlayerControl::StartPlaylist(mut tracks) => {
                         rng.shuffle(&mut tracks);
                         
-                        if let Err(_) = self.start_playlist_task(tracks) {
+                        if self.start_playlist_task(tracks).is_err() {
                             // TODO: Pass the error to the UI and show to user.
                         }
                     }
@@ -254,7 +254,7 @@ impl SpotifyWorker {
                             }
                         }
 
-                        if let Err(_) = self.start_playlist_at_idx_task(tracks, idx) {
+                        if self.start_playlist_at_idx_task(tracks, idx).is_err() {
                             // TODO: Pass the error to the UI and show to user.
                         }
                     }
@@ -514,7 +514,7 @@ impl SpotifyWorker {
         if cache_dirty {
             if let Ok(data) = ron::ser::to_string_pretty(&self.api_cache, ron::ser::PrettyConfig::default()) {
                 if let Err(e) = fs::write(self.cache_dir.join("tracks.ron"), data).await {
-                    println!("Error saving api cache: {}", e.to_string());
+                    println!("Error saving api cache: {}", e);
                 }
             }
         }
@@ -560,7 +560,7 @@ impl SpotifyWorker {
         api_client.playlist_remove_all_occurrences_of_items(&playlist_id, track_ids, None).await.map(|_| Ok(()))?
     }
 
-    async fn cache_cover_image(&self, id: &String, images: &Vec<(u32, String)>) {
+    async fn cache_cover_image(&self, id: &str, images: &[(u32, String)]) {
         let path = self.cache_dir.join(format!("cover-{}", id));
 
         if !path.exists() {
@@ -573,7 +573,7 @@ impl SpotifyWorker {
 
                         if !bytes.is_empty() {
                             if let Err(e) = fs::write(&path, bytes).await {
-                                println!("error writing cover file: {}", e.to_string());
+                                println!("error writing cover file: {}", e);
                             }
                         }
                     }

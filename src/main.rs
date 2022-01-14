@@ -273,10 +273,8 @@ impl epi::App for EspotApp {
                         self.user_playlists = playlists;
                         self.fetching_user_playlists = false;
                         
-                        for texture_data in self.textures_user_playlists_covers.iter() {
-                            if let Some((_, id)) = texture_data {
-                                frame.free_texture(*id);
-                            }
+                        for (_, id) in self.textures_user_playlists_covers.iter().flatten() {
+                            frame.free_texture(*id);
                         }
                         
                         self.textures_user_playlists_covers = vec![None; self.user_playlists.len()];
@@ -285,10 +283,8 @@ impl epi::App for EspotApp {
                         self.featured_playlists = playlists;
                         self.fetching_featured_playlists = false;
                         
-                        for texture_data in self.textures_featured_playlists_covers.iter() {
-                            if let Some((_, id)) = texture_data {
-                                frame.free_texture(*id);
-                            }
+                        for (_, id) in self.textures_featured_playlists_covers.iter().flatten() {
+                            frame.free_texture(*id);
                         }
 
                         self.textures_featured_playlists_covers = vec![None; self.featured_playlists.len()];
@@ -350,10 +346,10 @@ impl EspotApp {
     fn draw_playback_status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
             if let Some((size, id)) = self.texture_album_cover.as_ref() {
-                ui.image(id.clone(), size.clone());
+                ui.image(*id, *size);
             }
             else if let Some((size, id)) = self.texture_no_cover.as_ref() {
-                ui.image(id.clone(), size.clone());
+                ui.image(*id, *size);
             }
 
             ui.vertical(| ui | {
@@ -597,13 +593,11 @@ impl EspotApp {
 
                     let track_name_label = cols[0].selectable_label(false, title_label);
                     
-                    if track_name_label.clicked() {
-                        if self.is_playlist_ready() {
-                            self.paused = false;
-                            self.playback_started = true;
+                    if track_name_label.clicked() && self.is_playlist_ready() {
+                        self.paused = false;
+                        self.playback_started = true;
 
-                            self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone()));
-                        }
+                        self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone()));
                     }
 
                     track_name_label.context_menu(| ui | {
@@ -709,7 +703,7 @@ impl EspotApp {
         }
     }
 
-    fn make_artists_string(artists: &Vec<String>) -> String {
+    fn make_artists_string(artists: &[String]) -> String {
         let mut result = String::new();
 
         for (i, artist) in artists.iter().enumerate() {

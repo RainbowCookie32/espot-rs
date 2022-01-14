@@ -142,7 +142,7 @@ pub fn start_dbus_server(state_rx: broadcast::Receiver<PlayerStateUpdate>, contr
         let rt = Runtime::new().unwrap();
 
         if let Err(e) = rt.block_on(dbus_loop(state_rx, control_tx)) {
-            println!("Error in dbus server: {}", e.to_string());
+            println!("Error in dbus server: {}", e);
         }
     });
 }
