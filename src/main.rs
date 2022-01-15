@@ -24,6 +24,17 @@ impl Default for CurrentPanel {
     }
 }
 
+#[derive(Default)]
+struct PlaybackStatus {
+    paused: bool,
+    started: bool,
+
+    current_track: Option<TrackInfo>,
+    
+    current_playlist: Option<usize>,
+    current_playlist_tracks: Vec<TrackInfo>
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct EspotApp {
     #[serde(skip)]
@@ -50,17 +61,7 @@ pub struct EspotApp {
     fetching_featured_playlists: bool,
 
     #[serde(skip)]
-    paused: bool,
-    #[serde(skip)]
-    playback_started: bool,
-
-    #[serde(skip)]
-    current_track: Option<TrackInfo>,
-
-    #[serde(skip)]
-    selected_playlist: Option<usize>,
-    #[serde(skip)]
-    selected_playlist_tracks: Vec<TrackInfo>,
+    playback_status: PlaybackStatus,
 
     #[serde(skip)]
     state_rx: Option<broadcast::Receiver<PlayerStateUpdate>>,
@@ -104,13 +105,7 @@ impl Default for EspotApp {
             fetching_user_playlists: false,
             fetching_featured_playlists: false,
 
-            paused: true,
-            playback_started: false,
-
-            current_track: None,
-
-            selected_playlist: None,
-            selected_playlist_tracks: Vec::new(),
+            playback_status: PlaybackStatus::default(),
 
             state_rx: Some(state_rx),
             control_tx: Some(control_tx),
@@ -137,7 +132,7 @@ impl epi::App for EspotApp {
             *self = epi::get_value(storage, epi::APP_KEY).unwrap_or_default()
         }
 
-        self.paused = true;
+        self.playback_status.paused = true;
 
         if self.worker_task_tx.is_none() {
             let (worker_task_tx, worker_result_rx, state_rx, state_rx_dbus, control_tx) = SpotifyWorker::start();
@@ -179,7 +174,7 @@ impl epi::App for EspotApp {
             self.texture_no_cover = EspotApp::make_cover_image(include_bytes!("../resources/no_cover.png"), frame);
         }
 
-        if let Some(track) = self.current_track.as_ref() {
+        if let Some(track) = self.playback_status.current_track.as_ref() {
             if self.texture_album_cover.is_none() {
                 let album_id = &track.album_id;
                 let cover_path = self.cache_path.join(format!("cover-{}", album_id));
@@ -233,13 +228,13 @@ impl epi::App for EspotApp {
             if let Ok(state) = rx.try_recv() {
                 match state {
                     PlayerStateUpdate::Paused => {
-                        self.paused = true;
+                        self.playback_status.paused = true;
                     }
                     PlayerStateUpdate::Resumed => {
-                        self.paused = false;
+                        self.playback_status.paused = false;
                     }
                     PlayerStateUpdate::Stopped => {
-                        self.current_track = None;
+                        self.playback_status.current_track = None;
 
                         if let Some((_, id)) = self.texture_album_cover {
                             frame.free_texture(id);
@@ -247,8 +242,8 @@ impl epi::App for EspotApp {
                         }
                     }
                     PlayerStateUpdate::EndOfTrack(track) => {
-                        self.paused = false;
-                        self.current_track = Some(track);
+                        self.playback_status.paused = false;
+                        self.playback_status.current_track = Some(track);
 
                         if let Some((_, id)) = self.texture_album_cover {
                             frame.free_texture(id);
@@ -290,7 +285,7 @@ impl epi::App for EspotApp {
                         self.textures_featured_playlists_covers = vec![None; self.featured_playlists.len()];
                     }
                     WorkerResult::PlaylistTrackInfo(tracks) => {
-                        self.selected_playlist_tracks = tracks;
+                        self.playback_status.current_playlist_tracks = tracks;
                     }
                 }
             }
@@ -355,7 +350,7 @@ impl EspotApp {
             ui.vertical(| ui | {
                 ui.add_space(5.0);
 
-                if let Some(track) = self.current_track.as_ref() {
+                if let Some(track) = self.playback_status.current_track.as_ref() {
                     let artists_label = EspotApp::make_artists_string(&track.artists);
 
                     ui.heading(&track.name);
@@ -369,7 +364,7 @@ impl EspotApp {
                 ui.add_space(5.0);
                 
                 ui.horizontal(| ui | {
-                    let can_move = self.playback_started;
+                    let can_move = self.playback_status.started;
                     let can_start = self.is_playlist_ready();
     
                     ui.add_enabled_ui(can_move, | ui | {
@@ -379,21 +374,21 @@ impl EspotApp {
                     });
     
                     ui.add_enabled_ui(can_start, | ui | {
-                        let button_label = if self.paused {"▶"} else {"⏸"};
+                        let button_label = if self.playback_status.paused {"▶"} else {"⏸"};
 
                         if ui.button(button_label).clicked() {
-                            if !self.playback_started {
-                                self.playback_started = true;
-                                self.send_player_msg(PlayerControl::StartPlaylist(self.selected_playlist_tracks.clone()));
+                            if !self.playback_status.started {
+                                self.playback_status.started = true;
+                                self.send_player_msg(PlayerControl::StartPlaylist(self.playback_status.current_playlist_tracks.clone()));
                             }
-                            else if self.paused {
+                            else if self.playback_status.paused {
                                 self.send_player_msg(PlayerControl::Play);
                             }
                             else {
                                 self.send_player_msg(PlayerControl::Pause);
                             }
     
-                            self.paused = !self.paused;
+                            self.playback_status.paused = !self.playback_status.paused;
                         }
                     });
     
@@ -420,17 +415,17 @@ impl EspotApp {
                 if !self.user_playlists.is_empty() {
                     for (i, (_, p)) in self.user_playlists.iter().enumerate() {
                         if ui.selectable_label(false, &p.name).clicked() {
-                            if let Some(currently_selected) = self.selected_playlist.as_ref() {
+                            if let Some(currently_selected) = self.playback_status.current_playlist.as_ref() {
                                 if i != *currently_selected {
-                                    self.selected_playlist = Some(i);
-                                    self.selected_playlist_tracks = Vec::with_capacity(p.tracks.len());
+                                    self.playback_status.current_playlist = Some(i);
+                                    self.playback_status.current_playlist_tracks = Vec::with_capacity(p.tracks.len());
 
                                     self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                                 }
                             }
                             else {
-                                self.selected_playlist = Some(i);
-                                self.selected_playlist_tracks = Vec::with_capacity(p.tracks.len());
+                                self.playback_status.current_playlist = Some(i);
+                                self.playback_status.current_playlist_tracks = Vec::with_capacity(p.tracks.len());
 
                                 self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                             }
@@ -472,8 +467,8 @@ impl EspotApp {
                             if button.clicked() || label.clicked() {
                                 self.current_panel = CurrentPanel::Playlist;
 
-                                self.selected_playlist = Some(i);
-                                self.selected_playlist_tracks = Vec::with_capacity(playlist.tracks.len());
+                                self.playback_status.current_playlist = Some(i);
+                                self.playback_status.current_playlist_tracks = Vec::with_capacity(playlist.tracks.len());
                                 self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(playlist.clone()));
                             }
                         }
@@ -488,8 +483,8 @@ impl EspotApp {
                         if button.clicked() || label.clicked() {
                             self.current_panel = CurrentPanel::Playlist;
 
-                            self.selected_playlist = Some(i);
-                            self.selected_playlist_tracks = Vec::with_capacity(playlist.tracks.len());
+                            self.playback_status.current_playlist = Some(i);
+                            self.playback_status.current_playlist_tracks = Vec::with_capacity(playlist.tracks.len());
                             self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(playlist.clone()));
                         }
                     }
@@ -545,7 +540,7 @@ impl EspotApp {
 
     fn draw_playlist_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
-            if let Some(idx) = self.selected_playlist.as_ref() {
+            if let Some(idx) = self.playback_status.current_playlist.as_ref() {
                 let (_, playlist) = &self.user_playlists[*idx];
 
                 let label = {
@@ -563,7 +558,7 @@ impl EspotApp {
                 ui.strong("Select a playlist on the sidebar...");
             }
 
-            if self.selected_playlist.is_some() && !self.is_playlist_ready() {
+            if self.playback_status.current_playlist.is_some() && !self.is_playlist_ready() {
                 ui.add(spinner::Spinner::new());
             }
         });
@@ -582,7 +577,7 @@ impl EspotApp {
                 cols[2].label("Album");
                 cols[3].label("Duration");
 
-                for (track_idx, track) in self.selected_playlist_tracks.iter().enumerate() {
+                for (track_idx, track) in self.playback_status.current_playlist_tracks.iter().enumerate() {
                     let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
 
                     let title_label = EspotApp::trim_string(cols[0].available_width(), glyph_width, track.name.clone());
@@ -594,23 +589,23 @@ impl EspotApp {
                     let track_name_label = cols[0].selectable_label(false, title_label);
                     
                     if track_name_label.clicked() && self.is_playlist_ready() {
-                        self.paused = false;
-                        self.playback_started = true;
+                        self.playback_status.paused = false;
+                        self.playback_status.started = true;
 
-                        self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.selected_playlist_tracks.clone(), track.clone()));
+                        self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.playback_status.current_playlist_tracks.clone(), track.clone()));
                     }
 
                     track_name_label.context_menu(| ui | {
                         if ui.selectable_label(false, "Play from here").clicked() {
-                            self.paused = false;
-                            self.playback_started = true;
+                            self.playback_status.paused = false;
+                            self.playback_status.started = true;
 
-                            start_playlist = Some((self.selected_playlist_tracks.clone(), track.clone()));
+                            start_playlist = Some((self.playback_status.current_playlist_tracks.clone(), track.clone()));
                             ui.close_menu();
                         }
 
                         if ui.selectable_label(false, "Remove from playlist").clicked() {
-                            if let Some(i) = self.selected_playlist.as_ref() {
+                            if let Some(i) = self.playback_status.current_playlist.as_ref() {
                                 let (id, _) = &self.user_playlists[*i];
 
                                 remove_track = Some((id.clone(), track.id.clone(), track_idx));
@@ -628,7 +623,7 @@ impl EspotApp {
 
             if let Some((playlist, track_id, track_idx)) = remove_track {
                 self.fetching_user_playlists = true;
-                self.selected_playlist_tracks.remove(track_idx);
+                self.playback_status.current_playlist_tracks.remove(track_idx);
                 
                 self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(playlist, track_id));
                 self.send_worker_msg(WorkerTask::GetUserPlaylists);
@@ -661,9 +656,9 @@ impl EspotApp {
     }
 
     fn is_playlist_ready(&self) -> bool {
-        if let Some(i) = self.selected_playlist.as_ref() {
+        if let Some(i) = self.playback_status.current_playlist.as_ref() {
             if let Some((_, p)) = self.user_playlists.get(*i) {
-                self.selected_playlist_tracks.len() == p.tracks.len()
+                self.playback_status.current_playlist_tracks.len() == p.tracks.len()
             }
             else {
                 false
