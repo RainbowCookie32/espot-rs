@@ -737,7 +737,7 @@ impl EspotApp {
 
                     let track_name_label = cols[0].selectable_label(false, title_label);
                     
-                    if track_name_label.clicked() && self.is_playlist_ready() {
+                    if track_name_label.clicked() && !self.fetching_playlist_recommendations {
                         self.playback_status.paused = false;
                         self.playback_status.started = true;
 
