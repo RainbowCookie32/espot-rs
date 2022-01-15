@@ -152,6 +152,8 @@ impl epi::App for EspotApp {
             self.worker_result_rx = Some(worker_result_rx);
         }
 
+        self.cache_path = dirs::cache_dir().unwrap().join("espot-rs");
+
         let mut definitions = egui::FontDefinitions::default();
 
         if let Ok(font) = std::fs::read("resources/fonts/japanese.otf") {
