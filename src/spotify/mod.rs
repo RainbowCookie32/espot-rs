@@ -23,7 +23,7 @@ use librespot::playback::player::{Player, PlayerEvent};
 use rspotify::auth_code::AuthCodeSpotify;
 use librespot::metadata::{Playlist, Metadata};
 use rspotify::clients::{OAuthClient, BaseClient};
-use rspotify::model::{Id, TrackId, PlaylistId, PlayableId};
+use rspotify::model::{Id, TrackId, PlaylistId, PlayableId, ArtistId};
 
 pub use cache::TrackInfo;
 
@@ -50,6 +50,7 @@ pub enum WorkerTask {
     GetUserPlaylists,
     GetFeaturedPlaylists,
     GetPlaylistTracksInfo(Playlist),
+    GetRecommendationsForPlaylist(Playlist),
 
     RemoveTrackFromPlaylist(String, String)
 }
@@ -61,7 +62,8 @@ pub enum WorkerResult {
     UserPlaylists(Vec<(String, Playlist)>),
     FeaturedPlaylists(Vec<(String, Playlist)>),
 
-    PlaylistTrackInfo(Vec<TrackInfo>)
+    PlaylistTrackInfo(Vec<TrackInfo>),
+    PlaylistRecommendations(Vec<TrackInfo>)
 }
 
 #[derive(Debug)]
@@ -194,6 +196,12 @@ impl SpotifyWorker {
                     WorkerTask::GetPlaylistTracksInfo(playlist) => {
                         if self.fetch_playlist_tracks_info_task(playlist).await.is_err() {
                             // TODO: Pass the error to the UI and show to user.
+                        }
+                    }
+                    WorkerTask::GetRecommendationsForPlaylist(playlist) => {
+                        if let Ok(result) = self.get_recommendations_task(playlist).await {
+                            // TODO: Pass the error to the UI and show to user.
+                            self.worker_result_tx.send(WorkerResult::PlaylistRecommendations(result)).unwrap();
                         }
                     }
                     WorkerTask::RemoveTrackFromPlaylist(playlist, track) => {
@@ -467,9 +475,6 @@ impl SpotifyWorker {
     }
 
     pub async fn fetch_playlist_tracks_info_task(&mut self, playlist: Playlist) -> Result<()> {
-        let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
-
-        let mut cache_dirty = false;
         let mut tracks = Vec::with_capacity(playlist.tracks.len());
 
         let tracks_to_fetch: Vec<TrackId> = playlist.tracks.into_iter()
@@ -493,8 +498,78 @@ impl SpotifyWorker {
             .collect()
         ;
 
+        let mut fetched_tracks = self.get_tracks_info(&tracks_to_fetch).await?;
+        tracks.append(&mut fetched_tracks);
+
+        self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(tracks)).unwrap();
+        Ok(())
+    }
+
+    pub async fn get_recommendations_task(&mut self, playlist: Playlist) -> Result<Vec<TrackInfo>> {
+        let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
+
+        let mut rng = WyRand::new();
+        let mut tracks = Vec::with_capacity(playlist.tracks.len());
+        let mut playlist_tracks: Vec<TrackId> = playlist.tracks
+            .into_iter()
+            .filter_map(| id | {
+                TrackId::from_uri(&id.to_uri()).ok()
+            })
+            .collect()
+        ;
+
+        // The max amount of tracks for seeding you can use is 5, so shuffle them around
+        // and then grab the first 5 elements for our recommendation adventures.
+        rng.shuffle(&mut playlist_tracks);
+        playlist_tracks.truncate(5);
+
+        let seed_artists: Option<&Vec<ArtistId>> = None;
+        let seed_genres: Option<Vec<&str>> = None;
+
+        let results = client.recommendations(
+            None,
+            seed_artists,
+            seed_genres,
+            Some(&playlist_tracks),
+            None,
+            Some(50)
+        ).await.unwrap();
+
+        let tracks_to_fetch: Vec<TrackId> = results.tracks.into_iter()
+            // Only fetch tracks with a valid Spotify ID.
+            .filter_map(| track | {
+                track.id
+            })
+            // And filter out the tracks that we already have cached.
+            .filter(| track | {
+                if let Some(track) = self.api_cache.get(&track.uri()) {
+                    // This should already be there, but making sure never killed anyone.
+                    futures_lite::future::block_on(self.cache_cover_image(&track.album_id, &track.album_images));
+                    tracks.push(track.clone());
+
+                    false
+                }
+                else {
+                    true
+                }
+            })
+            .collect()
+        ;
+
+        let mut fetched_tracks = self.get_tracks_info(&tracks_to_fetch).await?;
+        tracks.append(&mut fetched_tracks);
+
+        Ok(tracks)
+    }
+
+    async fn get_tracks_info(&mut self, tracks: &[TrackId]) -> Result<Vec<TrackInfo>> {
+        let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
+
+        let mut cache_dirty = false;
+        let mut result = Vec::with_capacity(tracks.len());
+
         // The tracks endpoint accepts a maximum of 50 tracks at a time.
-        for tracks_batch in tracks_to_fetch.chunks(50) {
+        for tracks_batch in tracks.chunks(50) {
             let api_response = client.tracks(&tracks_batch.to_vec(), None).await?;
 
             for track in api_response {
@@ -504,7 +579,7 @@ impl SpotifyWorker {
                     self.cache_cover_image(album_id, &track.album_images).await;
                         
                     cache_dirty = true;
-                    tracks.push(track.clone());
+                    result.push(track.clone());
 
                     self.api_cache.insert(track.id.clone(), track);
                 }
@@ -519,8 +594,7 @@ impl SpotifyWorker {
             }
         }
 
-        self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(tracks)).unwrap();
-        Ok(())
+        Ok(result)
     }
 
     pub fn start_playlist_task(&mut self, tracks: Vec<TrackInfo>) -> Result<()> {
