@@ -13,6 +13,7 @@ use librespot::metadata::Playlist;
 
 use spotify::*;
 
+#[derive(PartialEq)]
 enum CurrentPanel {
     Home,
     Playlist,
@@ -409,15 +410,25 @@ impl EspotApp {
             ui.label("espot-rs");
             ui.separator();
 
-            if ui.selectable_label(false, "Home").clicked() {
+            if ui.selectable_label(self.current_panel == CurrentPanel::Home, "Home").clicked() {
                 self.current_panel = CurrentPanel::Home;
             }
+
+            ui.separator();
 
             ui.collapsing("Playlists", | ui | {
                 if !self.user_playlists.is_empty() {
                     for (i, (_, p)) in self.user_playlists.iter().enumerate() {
-                        let playlist_label = ui.selectable_label(false, &p.name);
+                        let checked = {
+                            if let Some(selected) = self.playback_status.current_playlist.as_ref() {
+                                self.current_panel == CurrentPanel::Playlist && i == *selected
+                            }
+                            else {
+                                false
+                            }
+                        };
 
+                        let playlist_label = ui.selectable_label(checked, &p.name);
                         let label_clicked = playlist_label.clicked();
                         
                         let mut get_recommendations = false;
@@ -467,9 +478,12 @@ impl EspotApp {
                 }
             });
 
-            let condition = !self.fetching_playlist_recommendations && self.playback_status.recommendations.is_empty();
+            ui.separator();
 
-            if ui.add_enabled(!condition, egui::SelectableLabel::new(false, "Recommendations")).clicked() {
+            let selected = self.current_panel == CurrentPanel::Recommendations;
+            let enabled = !self.fetching_playlist_recommendations && self.playback_status.recommendations.is_empty();
+
+            if ui.add_enabled(!enabled, egui::SelectableLabel::new(selected, "Recommendations")).clicked() {
                 self.current_panel = CurrentPanel::Recommendations;
             }
     }
