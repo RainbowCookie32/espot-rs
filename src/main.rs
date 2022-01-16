@@ -184,36 +184,17 @@ impl epi::App for EspotApp {
         }
 
         if let Some(track) = self.playback_status.current_track.as_ref() {
-            if self.texture_album_cover.is_none() {
-                let album_id = &track.album_id;
-                let cover_path = self.cache_path.join(format!("cover-{}", album_id));
-
-                if let Ok(buffer) = std::fs::read(cover_path) {
-                    self.texture_album_cover = EspotApp::make_cover_image(&buffer, frame);
-                }
-            }
+            EspotApp::load_texture(frame, &mut self.texture_album_cover, &self.cache_path, &track.album_id);
         }
 
-        for i in 0..self.textures_user_playlists_covers.len() {
-            if self.textures_user_playlists_covers[i].is_none() {
-                let (playlist_id, _) = &self.user_playlists[i];
-                let cover_path = self.cache_path.join(format!("cover-{}", playlist_id));
-
-                if let Ok(buffer) = std::fs::read(cover_path) {
-                    self.textures_user_playlists_covers[i] = EspotApp::make_cover_image(&buffer, frame);
-                }
-            }
+        for (i, target) in self.textures_user_playlists_covers.iter_mut().enumerate() {
+            let (playlist_id, _) = &self.user_playlists[i];
+            EspotApp::load_texture(frame, target, &self.cache_path, playlist_id);
         }
 
-        for i in 0..self.textures_featured_playlists_covers.len() {
-            if self.textures_featured_playlists_covers[i].is_none() {
-                let (playlist_id, _) = &self.featured_playlists[i];
-                let cover_path = self.cache_path.join(format!("cover-{}", playlist_id));
-
-                if let Ok(buffer) = std::fs::read(cover_path) {
-                    self.textures_featured_playlists_covers[i] = EspotApp::make_cover_image(&buffer, frame);
-                }
-            }
+        for (i, target) in self.textures_featured_playlists_covers.iter_mut().enumerate() {
+            let (playlist_id, _) = &self.featured_playlists[i];
+            EspotApp::load_texture(frame, target, &self.cache_path, playlist_id);
         }
 
         if self.logged_in {
@@ -816,6 +797,16 @@ impl EspotApp {
     fn send_player_msg(&self, message: PlayerControl) {
         if let Some(tx) = self.control_tx.as_ref() {
             tx.send(message).unwrap();
+        }
+    }
+
+    fn load_texture(frame: &epi::Frame, target: &mut Option<(egui::Vec2, egui::TextureId)>, cache_path: &PathBuf, id: &str) {
+        if target.is_none() {
+            let cover_path = cache_path.join(format!("cover-{}", id));
+
+            if let Ok(buffer) = std::fs::read(cover_path) {
+                *target = EspotApp::make_cover_image(&buffer, frame);
+            }
         }
     }
 
