@@ -143,6 +143,7 @@ impl epi::App for EspotApp {
         if self.worker_task_tx.is_none() {
             let (worker_task_tx, worker_result_rx, state_rx, state_rx_dbus, control_tx) = SpotifyWorker::start();
 
+            #[cfg(not(debug_assertions))]
             dbus::start_dbus_server(state_rx_dbus, control_tx.clone());
 
             self.state_rx = Some(state_rx);
