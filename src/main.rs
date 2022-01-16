@@ -447,7 +447,7 @@ impl EspotApp {
                                 ui.close_menu();
                             }
 
-                            if ui.selectable_label(false, "Get recommendations from this").clicked() {
+                            if ui.selectable_label(false, "Get recommendations").clicked() {
                                 get_recommendations = true;
                                 ui.close_menu();
                             }
@@ -619,10 +619,9 @@ impl EspotApp {
         self.draw_songs_list(ui);
     }
 
-    // FIXME: Code duplication goes really brrr. This is almost 1:1 with the code above.
     fn draw_recommendations_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
-            if !self.fetching_playlist_recommendations {
+            if self.is_playlist_ready() {
                 let tracks = self.playback_status.recommendations.len();
 
                 let label = {
@@ -652,6 +651,7 @@ impl EspotApp {
                 match self.current_panel {
                     CurrentPanel::Playlist => true,
                     CurrentPanel::Recommendations => false,
+                    // If we are not on either of those panels, we shouldn't be rendering this.
                     _ => return
                 }
             };
@@ -687,18 +687,19 @@ impl EspotApp {
 
                     let track_name_label = cols[0].selectable_label(false, title_label);
                     
-                    if track_name_label.clicked() {
-                        if is_user_playlist && self.is_playlist_ready() {
-                            let tracks = self.playback_status.current_playlist_tracks.clone();
-                            self.send_player_msg(PlayerControl::StartPlaylistAtTrack(tracks.clone(), track.clone()));
-                        }
-                        else if !self.fetching_playlist_recommendations {
-                            let tracks = self.playback_status.recommendations.clone();
-                            self.send_player_msg(PlayerControl::StartPlaylistAtTrack(tracks.clone(), track.clone()));
-                        }
+                    if track_name_label.clicked() && self.is_playlist_ready() {
+                        let tracks = {
+                            if is_user_playlist {
+                                self.playback_status.current_playlist_tracks.clone()
+                            }
+                            else {
+                                self.playback_status.recommendations.clone()
+                            }
+                        };
 
                         self.playback_status.paused = false;
                         self.playback_status.started = true;
+                        self.send_player_msg(PlayerControl::StartPlaylistAtTrack(tracks.clone(), track.clone()));
                     }
 
                     track_name_label.context_menu(| ui | {
@@ -784,16 +785,24 @@ impl EspotApp {
     }
 
     fn is_playlist_ready(&self) -> bool {
-        if let Some(i) = self.playback_status.current_playlist.as_ref() {
-            if let Some((_, p)) = self.user_playlists.get(*i) {
-                self.playback_status.current_playlist_tracks.len() == p.tracks.len()
+        match self.current_panel {
+            CurrentPanel::Home => false,
+            CurrentPanel::Playlist => {
+                if let Some(i) = self.playback_status.current_playlist.as_ref() {
+                    if let Some((_, p)) = self.user_playlists.get(*i) {
+                        self.playback_status.current_playlist_tracks.len() == p.tracks.len()
+                    }
+                    else {
+                        false
+                    }
+                }
+                else {
+                    false
+                }
             }
-            else {
-                false
+            CurrentPanel::Recommendations => {
+                !self.fetching_playlist_recommendations && !self.playback_status.recommendations.is_empty()
             }
-        }
-        else {
-            false
         }
     }
 
