@@ -616,77 +616,7 @@ impl EspotApp {
         });
 
         ui.separator();
-
-        egui::ScrollArea::vertical().show(ui, | ui | {
-            ui.style_mut().wrap = Some(false);
-
-            let mut remove_track = None;
-            let mut start_playlist = None;
-
-            ui.columns(4, | cols | {
-                cols[0].label("Title");
-                cols[1].label("Artists");
-                cols[2].label("Album");
-                cols[3].label("Duration");
-
-                for (track_idx, track) in self.playback_status.current_playlist_tracks.iter().enumerate() {
-                    let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
-
-                    let title_label = EspotApp::trim_string(cols[0].available_width(), glyph_width, track.name.clone());
-                    let artists_label = EspotApp::trim_string(cols[1].available_width(), glyph_width, EspotApp::make_artists_string(&track.artists));
-
-                    let album_label = EspotApp::trim_string(cols[2].available_width(), glyph_width, track.album_name.clone());
-                    let duration_label = EspotApp::trim_string(cols[3].available_width(), glyph_width, format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60));
-
-                    let track_name_label = cols[0].selectable_label(false, title_label);
-                    
-                    if track_name_label.clicked() && self.is_playlist_ready() {
-                        self.playback_status.paused = false;
-                        self.playback_status.started = true;
-
-                        self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.playback_status.current_playlist_tracks.clone(), track.clone()));
-                    }
-
-                    track_name_label.context_menu(| ui | {
-                        if ui.selectable_label(false, "Play from here").clicked() {
-                            self.playback_status.paused = false;
-                            self.playback_status.started = true;
-
-                            start_playlist = Some((self.playback_status.current_playlist_tracks.clone(), track.clone()));
-                            ui.close_menu();
-                        }
-
-                        if ui.selectable_label(false, "Remove from playlist").clicked() {
-                            if let Some(i) = self.playback_status.current_playlist.as_ref() {
-                                let (id, _) = &self.user_playlists[*i];
-
-                                remove_track = Some((id.clone(), track.id.clone(), track_idx));
-                            }
-
-                            ui.close_menu();
-                        }
-                    });
-
-                    let _ = cols[1].selectable_label(false, artists_label);
-                    let _ = cols[2].selectable_label(false, album_label);
-                    let _ = cols[3].selectable_label(false, duration_label);
-                }
-            });
-
-            if let Some((playlist, track_id, track_idx)) = remove_track {
-                self.fetching_user_playlists = true;
-                self.playback_status.current_playlist_tracks.remove(track_idx);
-                
-                self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(playlist, track_id));
-                self.send_worker_msg(WorkerTask::GetUserPlaylists);
-            }
-
-            if let Some((playlist, track)) = start_playlist {
-                self.send_player_msg(PlayerControl::StartPlaylistAtTrack(playlist, track));
-            }
-
-            ui.style_mut().wrap = None;
-        });
+        self.draw_songs_list(ui);
     }
 
     // FIXME: Code duplication goes really brrr. This is almost 1:1 with the code above.
@@ -713,20 +643,40 @@ impl EspotApp {
         });
 
         ui.separator();
+        self.draw_songs_list(ui);
+    }
 
+    fn draw_songs_list(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, | ui | {
+            let is_user_playlist = {
+                match self.current_panel {
+                    CurrentPanel::Playlist => true,
+                    CurrentPanel::Recommendations => false,
+                    _ => return
+                }
+            };
+
             ui.style_mut().wrap = Some(false);
 
             let mut remove_track = None;
             let mut start_playlist = None;
 
             ui.columns(4, | cols | {
+                let tracks_iter = {
+                    if is_user_playlist {
+                        self.playback_status.current_playlist_tracks.iter()
+                    }
+                    else {
+                        self.playback_status.recommendations.iter()
+                    }
+                };
+
                 cols[0].label("Title");
                 cols[1].label("Artists");
                 cols[2].label("Album");
                 cols[3].label("Duration");
 
-                for (track_idx, track) in self.playback_status.recommendations.iter().enumerate() {
+                for (track_idx, track) in tracks_iter.enumerate() {
                     let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
 
                     let title_label = EspotApp::trim_string(cols[0].available_width(), glyph_width, track.name.clone());
@@ -737,24 +687,54 @@ impl EspotApp {
 
                     let track_name_label = cols[0].selectable_label(false, title_label);
                     
-                    if track_name_label.clicked() && !self.fetching_playlist_recommendations {
+                    if track_name_label.clicked() {
+                        if is_user_playlist && self.is_playlist_ready() {
+                            let tracks = self.playback_status.current_playlist_tracks.clone();
+                            self.send_player_msg(PlayerControl::StartPlaylistAtTrack(tracks.clone(), track.clone()));
+                        }
+                        else if !self.fetching_playlist_recommendations {
+                            let tracks = self.playback_status.recommendations.clone();
+                            self.send_player_msg(PlayerControl::StartPlaylistAtTrack(tracks.clone(), track.clone()));
+                        }
+
                         self.playback_status.paused = false;
                         self.playback_status.started = true;
-
-                        self.send_player_msg(PlayerControl::StartPlaylistAtTrack(self.playback_status.recommendations.clone(), track.clone()));
                     }
 
                     track_name_label.context_menu(| ui | {
                         if ui.selectable_label(false, "Play from here").clicked() {
+                            let tracks = {
+                                if is_user_playlist {
+                                    self.playback_status.current_playlist_tracks.clone()
+                                }
+                                else {
+                                    self.playback_status.recommendations.clone()
+                                }
+                            };
+
                             self.playback_status.paused = false;
                             self.playback_status.started = true;
+                            start_playlist = Some((tracks, track.clone()));
 
-                            start_playlist = Some((self.playback_status.recommendations.clone(), track.clone()));
                             ui.close_menu();
                         }
 
-                        if ui.selectable_label(false, "Remove from queue").clicked() {
-                            remove_track = Some(track_idx);
+                        if ui.selectable_label(false, "Remove").clicked() {
+                            let id = {
+                                if is_user_playlist {
+                                    if let Some(i) = self.playback_status.current_playlist.as_ref() {
+                                        self.user_playlists[*i].0.clone()
+                                    }
+                                    else {
+                                        return;
+                                    }
+                                }
+                                else {
+                                    String::new()
+                                }
+                            };
+
+                            remove_track = Some((id, track.id.clone(), track_idx));
                             ui.close_menu();
                         }
                     });
@@ -765,9 +745,16 @@ impl EspotApp {
                 }
             });
 
-            if let Some(track_idx) = remove_track {
-                self.fetching_user_playlists = true;
-                self.playback_status.recommendations.remove(track_idx);
+            if let Some((playlist, track_id, track_idx)) = remove_track {
+                if is_user_playlist {
+                    self.fetching_user_playlists = true;
+                    self.playback_status.current_playlist_tracks.remove(track_idx);
+                    self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(playlist, track_id));
+                    self.send_worker_msg(WorkerTask::GetUserPlaylists);
+                }
+                else {
+                    self.playback_status.recommendations.remove(track_idx);
+                }
             }
 
             if let Some((playlist, track)) = start_playlist {
