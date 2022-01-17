@@ -445,7 +445,7 @@ impl SpotifyWorker {
         let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
         let session = self.spotify_session.as_ref().ok_or(error::WorkerError::NoSpotifySession)?;
 
-        let playlists = client.featured_playlists(None, None, None, None, None).await;
+        let playlists = client.featured_playlists(None, None, None, Some(5), None).await;
 
         if let Ok(item) = playlists {
             for playlist in item.playlists.items {
