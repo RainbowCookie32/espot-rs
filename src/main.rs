@@ -581,6 +581,12 @@ impl EspotApp {
             if self.v.playback_status.current_playlist.is_some() && !self.is_playlist_ready() {
                 ui.add(spinner::Spinner::new());
             }
+            else {
+                if ui.button("Play").clicked() {
+                    self.v.playback_status.started = true;
+                    self.send_player_msg(PlayerControl::StartPlaylist(self.v.playback_status.current_playlist_tracks.clone()));
+                }
+            }
         });
 
         ui.separator();
@@ -606,6 +612,11 @@ impl EspotApp {
             else {
                 ui.strong("Fetching recommendations...");
                 ui.add(spinner::Spinner::new());
+            }
+
+            if ui.button("Play").clicked() {
+                self.v.playback_status.started = true;
+                self.send_player_msg(PlayerControl::StartPlaylist(self.v.playback_status.recommendations.clone()));
             }
         });
 
