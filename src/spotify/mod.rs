@@ -255,12 +255,9 @@ impl SpotifyWorker {
                         let mut idx = 0;
                         rng.shuffle(&mut tracks);
 
-                        for (i, track) in tracks.iter().enumerate() {
-                            if track.id == start.id {
-                                idx = i;
-                                break;
-                            }
-                        }
+                        if let Some((i, _)) = tracks.iter().enumerate().find(| (_, track) | track.id == start.id) {
+                            idx = i;
+                        } 
 
                         if self.start_playlist_at_idx_task(tracks, idx).is_err() {
                             // TODO: Pass the error to the UI and show to user.
