@@ -69,11 +69,11 @@ struct VolatileData {
     worker_task_tx: Option<mpsc::UnboundedSender<WorkerTask>>,
     worker_result_rx: Option<mpsc::UnboundedReceiver<WorkerResult>>,
 
-    texture_no_cover: Option<(egui::Vec2, egui::TextureId)>,
-    texture_album_cover: Option<(egui::Vec2, egui::TextureId)>,
+    texture_no_cover: Option<egui::TextureId>,
+    texture_album_cover: Option<egui::TextureId>,
     
-    textures_user_playlists_covers: Vec<Option<(egui::Vec2, egui::TextureId)>>,
-    textures_featured_playlists_covers: Vec<Option<(egui::Vec2, egui::TextureId)>>
+    textures_user_playlists_covers: Vec<Option<egui::TextureId>>,
+    textures_featured_playlists_covers: Vec<Option<egui::TextureId>>
 }
 
 #[derive(Deserialize, Serialize)]
@@ -86,7 +86,6 @@ pub struct EspotApp {
 impl Default for EspotApp {
     fn default() -> EspotApp {
         let cache_path = dirs::cache_dir().unwrap().join("espot-rs");
-        let (worker_task_tx, worker_result_rx, state_rx, _, control_tx) = SpotifyWorker::start();
 
         let p = PersistentData {
             cache_path,
@@ -200,7 +199,7 @@ impl epi::App for EspotApp {
                     PlayerStateUpdate::Stopped => {
                         self.v.playback_status.current_track = None;
 
-                        if let Some((_, id)) = self.v.texture_album_cover {
+                        if let Some(id) = self.v.texture_album_cover {
                             frame.free_texture(id);
                             self.v.texture_album_cover = None;
                         }
@@ -209,7 +208,7 @@ impl epi::App for EspotApp {
                         self.v.playback_status.paused = false;
                         self.v.playback_status.current_track = Some(track);
 
-                        if let Some((_, id)) = self.v.texture_album_cover {
+                        if let Some(id) = self.v.texture_album_cover {
                             frame.free_texture(id);
                             self.v.texture_album_cover = None;
                         }
@@ -232,7 +231,7 @@ impl epi::App for EspotApp {
                         self.v.user_playlists = playlists;
                         self.v.fetching_user_playlists = false;
                         
-                        for (_, id) in self.v.textures_user_playlists_covers.iter().flatten() {
+                        for id in self.v.textures_user_playlists_covers.iter().flatten() {
                             frame.free_texture(*id);
                         }
                         
@@ -242,7 +241,7 @@ impl epi::App for EspotApp {
                         self.v.featured_playlists = playlists;
                         self.v.fetching_featured_playlists = false;
                         
-                        for (_, id) in self.v.textures_featured_playlists_covers.iter().flatten() {
+                        for id in self.v.textures_featured_playlists_covers.iter().flatten() {
                             frame.free_texture(*id);
                         }
 
@@ -309,11 +308,11 @@ impl EspotApp {
 
     fn draw_playback_status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
-            if let Some((size, id)) = self.v.texture_album_cover.as_ref() {
-                ui.image(*id, *size);
+            if let Some(id) = self.v.texture_album_cover.as_ref() {
+                ui.image(*id, egui::vec2(96.0, 96.0));
             }
-            else if let Some((size, id)) = self.v.texture_no_cover.as_ref() {
-                ui.image(*id, *size);
+            else if let Some(id) = self.v.texture_no_cover.as_ref() {
+                ui.image(*id, egui::vec2(96.0, 96.0));
             }
 
             ui.vertical(| ui | {
@@ -478,8 +477,8 @@ impl EspotApp {
                     let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
 
                     if let Some(t) = self.v.textures_user_playlists_covers.get(i) {
-                        if let Some((size, id)) = t {
-                            let button = egui::ImageButton::new(*id, *size).tint(tint);
+                        if let Some(id) = t {
+                            let button = egui::ImageButton::new(*id, egui::vec2(96.0, 96.0)).tint(tint);
                             let button = ui.add(button);
 
                             let text = egui::RichText::new(&playlist.name).strong();
@@ -494,8 +493,8 @@ impl EspotApp {
                             }
                         }
                     }
-                    else if let Some((size, id)) = self.v.texture_no_cover.as_ref() {
-                        let button = egui::ImageButton::new(*id, *size).tint(tint);
+                    else if let Some(id) = self.v.texture_no_cover.as_ref() {
+                        let button = egui::ImageButton::new(*id, egui::vec2(96.0, 96.0)).tint(tint);
                         let button = ui.add(button);
 
                         let text = egui::RichText::new(&playlist.name).strong();
@@ -531,8 +530,8 @@ impl EspotApp {
                     let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
 
                     if let Some(t) = self.v.textures_featured_playlists_covers.get(i) {
-                        if let Some((size, id)) = t {
-                            let button = egui::ImageButton::new(*id, *size).tint(tint);
+                        if let Some(id) = t {
+                            let button = egui::ImageButton::new(*id, egui::vec2(96.0, 96.0)).tint(tint);
                             let button = ui.add(button);
 
                             let text = egui::RichText::new(&playlist.name).strong();
@@ -543,8 +542,8 @@ impl EspotApp {
                             }
                         }
                     }
-                    else if let Some((size, id)) = self.v.texture_no_cover.as_ref() {
-                        let button = egui::ImageButton::new(*id, *size).tint(tint);
+                    else if let Some(id) = self.v.texture_no_cover.as_ref() {
+                        let button = egui::ImageButton::new(*id, egui::vec2(96.0, 96.0)).tint(tint);
                         let button = ui.add(button);
 
                         let text = egui::RichText::new(&playlist.name).strong();
@@ -787,7 +786,7 @@ impl EspotApp {
         }
     }
 
-    fn load_texture(frame: &epi::Frame, target: &mut Option<(egui::Vec2, egui::TextureId)>, cache_path: &PathBuf, id: &str) {
+    fn load_texture(frame: &epi::Frame, target: &mut Option<egui::TextureId>, cache_path: &PathBuf, id: &str) {
         if target.is_none() {
             let cover_path = cache_path.join(format!("cover-{}", id));
 
@@ -797,17 +796,16 @@ impl EspotApp {
         }
     }
 
-    fn make_cover_image(buffer: &[u8], frame: &epi::Frame) -> Option<(egui::Vec2, egui::TextureId)> {
+    fn make_cover_image(buffer: &[u8], frame: &epi::Frame) -> Option<egui::TextureId> {
         if let Ok(image) = image::load_from_memory(buffer) {
             let image_buf = image.to_rgba8();
             let image_size = [image.width() as usize, image.height() as usize];
             let image_pixels = image_buf.into_vec();
 
             let image = epi::Image::from_rgba_unmultiplied(image_size, &image_pixels);
-            let size = egui::Vec2::new(96.0, 96.0);
             let texture = frame.alloc_texture(image);
             
-            Some((size, texture))
+            Some(texture)
         }
         else {
             None
