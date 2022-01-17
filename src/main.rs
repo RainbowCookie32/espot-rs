@@ -407,7 +407,7 @@ impl EspotApp {
                         let mut opened_from_ctx_menu = false;
 
                         playlist_label.context_menu(| ui | {
-                            if ui.selectable_label(false, "Open playlist").clicked() {
+                            if ui.selectable_label(false, "View").clicked() {
                                 opened_from_ctx_menu = true;
                                 ui.close_menu();
                             }
