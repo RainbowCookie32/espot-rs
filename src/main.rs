@@ -659,13 +659,55 @@ impl EspotApp {
                 for (track_idx, track) in tracks_iter.enumerate() {
                     let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
 
-                    let title_label = EspotApp::trim_string(cols[0].available_width(), glyph_width, track.name.clone());
-                    let artists_label = EspotApp::trim_string(cols[1].available_width(), glyph_width, EspotApp::make_artists_string(&track.artists));
+                    let track_name_label = {
+                        let available_width = cols[0].available_width();
+                        let (trimmed, track_name) = EspotApp::trim_string(available_width, glyph_width, track.name.clone());
 
-                    let album_label = EspotApp::trim_string(cols[2].available_width(), glyph_width, track.album_name.clone());
-                    let duration_label = EspotApp::trim_string(cols[3].available_width(), glyph_width, format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60));
+                        if trimmed {
+                            cols[0].selectable_label(false, track_name).on_hover_text(&track.name)
+                        }
+                        else {
+                            cols[0].selectable_label(false, track_name)
+                        }
+                    };
 
-                    let track_name_label = cols[0].selectable_label(false, title_label);
+                    let _track_artist_label = {
+                        let available_width = cols[1].available_width();
+                        let artists_string = EspotApp::make_artists_string(&track.artists);
+                        let (trimmed, artists) = EspotApp::trim_string(available_width, glyph_width, artists_string.clone());
+
+                        if trimmed {
+                            cols[1].selectable_label(false, artists).on_hover_text(artists_string)
+                        }
+                        else {
+                            cols[1].selectable_label(false, artists)
+                        }
+                    };
+
+                    let _track_album_label = {
+                        let available_width = cols[2].available_width();
+                        let (trimmed, album) = EspotApp::trim_string(available_width, glyph_width, track.album_name.clone());
+
+                        if trimmed {
+                            cols[2].selectable_label(false, album).on_hover_text(track.album_name.clone())
+                        }
+                        else {
+                            cols[2].selectable_label(false, album)
+                        }
+                    };
+
+                    let _track_duration_label = {
+                        let available_width = cols[3].available_width();
+                        let duration_string = format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60);
+                        let (trimmed, duration) = EspotApp::trim_string(available_width, glyph_width, duration_string.clone());
+
+                        if trimmed {
+                            cols[3].selectable_label(false, duration).on_hover_text(duration_string)
+                        }
+                        else {
+                            cols[3].selectable_label(false, duration)
+                        }
+                    };
                     
                     if track_name_label.clicked() && self.is_playlist_ready() {
                         let tracks = {
@@ -719,10 +761,6 @@ impl EspotApp {
                             ui.close_menu();
                         }
                     });
-
-                    let _ = cols[1].selectable_label(false, artists_label);
-                    let _ = cols[2].selectable_label(false, album_label);
-                    let _ = cols[3].selectable_label(false, duration_label);
                 }
             });
 
@@ -746,9 +784,11 @@ impl EspotApp {
         });
     }
 
-    fn trim_string(available_width: f32, glyph_width: f32, text: String) -> String {
+    fn trim_string(available_width: f32, glyph_width: f32, text: String) -> (bool, String) {
         let mut text = text;
         let mut text_chars: Vec<char> = text.chars().collect();
+
+        let mut trimmed = false;
 
         let max_chars_in_space = (available_width / glyph_width) as usize;
 
@@ -759,9 +799,11 @@ impl EspotApp {
             
             text = text_chars.into_iter().collect();
             text.push_str("...");
+
+            trimmed = true;
         }
 
-        text
+        (trimmed, text)
     }
 
     fn is_playlist_ready(&self) -> bool {
