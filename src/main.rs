@@ -6,7 +6,7 @@ mod dbus;
 mod spotify;
 mod spinner;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::{egui, epi};
 use image::GenericImageView;
@@ -584,11 +584,9 @@ impl EspotApp {
             if self.v.playback_status.current_playlist.is_some() && !self.is_playlist_ready() {
                 ui.add(spinner::Spinner::new());
             }
-            else {
-                if ui.button("Play").clicked() {
-                    self.v.playback_status.started = true;
-                    self.send_player_msg(PlayerControl::StartPlaylist(self.v.playback_status.current_playlist_tracks.clone()));
-                }
+            else if ui.button("Play").clicked() {
+                self.v.playback_status.started = true;
+                self.send_player_msg(PlayerControl::StartPlaylist(self.v.playback_status.current_playlist_tracks.clone()));
             }
         });
 
@@ -800,7 +798,7 @@ impl EspotApp {
         }
     }
 
-    fn load_texture(frame: &epi::Frame, target: &mut Option<egui::TextureId>, cache_path: &PathBuf, id: &str) {
+    fn load_texture(frame: &epi::Frame, target: &mut Option<egui::TextureId>, cache_path: &Path, id: &str) {
         if target.is_none() {
             let cover_path = cache_path.join(format!("cover-{}", id));
 
