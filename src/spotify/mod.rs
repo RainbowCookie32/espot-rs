@@ -623,7 +623,7 @@ impl SpotifyWorker {
     }
 
     pub async fn remove_track_from_playlist_task(&mut self, playlist: String, track: String) -> Result<()> {
-        let api_client = self.api_client.as_mut().ok_or(error::WorkerError::NoSpotifyPlayer)?;
+        let api_client = self.api_client.as_mut().ok_or(error::WorkerError::NoAPIClient)?;
         let playlist_id = PlaylistId::from_uri(&playlist).map_err(|_| error::WorkerError::BadSpotifyId)?;
         let track_id = TrackId::from_uri(&track).map_err(|_| error::WorkerError::BadSpotifyId)?;
         let track_ids: Vec<&dyn PlayableId> = vec![&track_id];
