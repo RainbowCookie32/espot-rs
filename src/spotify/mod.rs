@@ -539,6 +539,10 @@ impl SpotifyWorker {
         ).await.unwrap();
 
         let tracks_to_fetch: Vec<TrackId> = results.tracks.into_iter()
+            // Filter out unavailable tracks.
+            .filter(| track | {
+                track.is_playable.unwrap_or(true)
+            })
             // Only fetch tracks with a valid Spotify ID.
             .filter_map(| track | {
                 track.id
