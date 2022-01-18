@@ -1,14 +1,9 @@
 mod cache;
 mod error;
 
-use std::path::PathBuf;
-use std::collections::HashMap;
-
-use reqwest::Client;
 use nanorand::{Rng, WyRand};
 use futures_lite::StreamExt;
 
-use tokio::fs;
 use tokio::runtime::Runtime;
 use tokio::sync::{broadcast, mpsc};
 
@@ -25,6 +20,7 @@ use librespot::metadata::{Playlist, Metadata};
 use rspotify::clients::{OAuthClient, BaseClient};
 use rspotify::model::{Id, TrackId, PlaylistId, PlayableId, ArtistId};
 
+use cache::CacheHandler;
 pub use cache::TrackInfo;
 
 
@@ -90,11 +86,8 @@ pub enum PlayerStateUpdate {
 }
 
 pub struct SpotifyWorker {
-    cache_dir: PathBuf,
-    http_client: Client,
-
-    api_cache: HashMap<String, TrackInfo>,
     api_client: Option<AuthCodeSpotify>,
+    api_cache_handler: CacheHandler,
 
     spotify_player: Option<Player>,
     spotify_session: Option<Session>,
@@ -113,7 +106,6 @@ pub struct SpotifyWorker {
 impl SpotifyWorker {
     pub fn start() -> (TaskTx, TaskResultRx, StateRx, StateRx, ControlTx) {
         let cache_dir = dirs::cache_dir().unwrap().join("espot-rs");
-        let http_client = Client::new();
 
         let (state_tx, state_rx) = broadcast::channel(5);
         let (control_tx, control_rx) = mpsc::unbounded_channel();
@@ -130,15 +122,11 @@ impl SpotifyWorker {
             }
         }
 
-        let cache = std::fs::read_to_string(&cache_dir.join("tracks.ron")).unwrap_or_default();
-        let api_cache = ron::from_str(&cache).unwrap_or_default();
+        let api_cache_handler = CacheHandler::init(cache_dir);
 
         let worker = SpotifyWorker {
-            cache_dir,
-            http_client,
-
             api_client: None,
-            api_cache,
+            api_cache_handler,
 
             spotify_player: None,
             spotify_session: None,
@@ -387,8 +375,9 @@ impl SpotifyWorker {
             };
 
             let cache = {
-                let system_location = Some(self.cache_dir.join("system"));
-                let audio_location = Some(self.cache_dir.join("audio"));
+                let cache_dir = dirs::cache_dir().unwrap().join("espot-rs");
+                let system_location = Some(cache_dir.join("system"));
+                let audio_location = Some(cache_dir.join("audio"));
                 
                 librespot::core::cache::Cache::new(system_location, audio_location, None).ok()
             };
@@ -431,7 +420,7 @@ impl SpotifyWorker {
                     .collect()
                 ;
 
-                self.cache_cover_image(&playlist_uri, &images).await;
+                self.api_cache_handler.cache_cover_image(&playlist_uri, &images).await;
 
                 if let Ok(p) = Playlist::get(session, playlist_id).await {
                     result.push((playlist.id.to_string(), p));
@@ -466,7 +455,7 @@ impl SpotifyWorker {
                     .collect()
                 ;
 
-                self.cache_cover_image(&playlist_uri, &images).await;
+                self.api_cache_handler.cache_cover_image(&playlist_uri, &images).await;
 
                 if let Ok(p) = Playlist::get(session, playlist_id).await {
                     result.push((playlist.id.to_string(), p));
@@ -487,11 +476,8 @@ impl SpotifyWorker {
             })
             // And filter out the tracks that we already have cached.
             .filter(| track | {
-                if let Some(track) = self.api_cache.get(&track.uri()) {
-                    // This should already be there, but making sure never killed anyone.
-                    futures_lite::future::block_on(self.cache_cover_image(&track.album_id, &track.album_images));
-                    tracks.push(track.clone());
-
+                if let Some(track) = self.api_cache_handler.get_track_info(&track.uri()) {
+                    tracks.push(track);
                     false
                 }
                 else {
@@ -549,11 +535,8 @@ impl SpotifyWorker {
             })
             // And filter out the tracks that we already have cached.
             .filter(| track | {
-                if let Some(track) = self.api_cache.get(&track.uri()) {
-                    // This should already be there, but making sure never killed anyone.
-                    futures_lite::future::block_on(self.cache_cover_image(&track.album_id, &track.album_images));
-                    tracks.push(track.clone());
-
+                if let Some(track) = self.api_cache_handler.get_track_info(&track.uri()) {
+                    tracks.push(track);
                     false
                 }
                 else {
@@ -580,25 +563,15 @@ impl SpotifyWorker {
             let api_response = client.tracks(&tracks_batch.to_vec(), None).await?;
 
             for track in api_response {
-                if let Some(track) = TrackInfo::new(track) {
-                    let album_id = &track.album_id;
-
-                    self.cache_cover_image(album_id, &track.album_images).await;
-                        
+                if let Some(track) = self.api_cache_handler.cache_track_info(track) {
                     cache_dirty = true;
                     result.push(track.clone());
-
-                    self.api_cache.insert(track.id.clone(), track);
                 }
             }
         }
 
         if cache_dirty {
-            if let Ok(data) = ron::ser::to_string_pretty(&self.api_cache, ron::ser::PrettyConfig::default()) {
-                if let Err(e) = fs::write(self.cache_dir.join("tracks.ron"), data).await {
-                    println!("Error saving api cache: {}", e);
-                }
-            }
+            self.api_cache_handler.save_cache().await;
         }
 
         Ok(result)
@@ -649,29 +622,5 @@ impl SpotifyWorker {
         let track_ids: Vec<&dyn PlayableId> = vec![&track_id];
         
         api_client.playlist_remove_all_occurrences_of_items(&playlist_id, track_ids, None).await.map(|_| Ok(()))?
-    }
-
-    async fn cache_cover_image(&self, id: &str, images: &[(u32, String)]) {
-        let path = self.cache_dir.join(format!("cover-{}", id));
-
-        if !path.exists() {
-            for (size, url) in images.iter() {
-                // Spotify doesn't include size data for some images for some reason,
-                // so because of uwrap_or_default(), a properly sized image might be 0 here.
-                if *size == 0 || *size == 300 {
-                    if let Ok(res) = self.http_client.get(url).send().await {
-                        let bytes = res.bytes().await.unwrap_or_default().to_vec();
-
-                        if !bytes.is_empty() {
-                            if let Err(e) = fs::write(&path, bytes).await {
-                                println!("error writing cover file: {}", e);
-                            }
-                        }
-                    }
-
-                    break;
-                }
-            }
-        }
     }
 }
