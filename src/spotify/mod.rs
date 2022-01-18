@@ -52,6 +52,7 @@ pub enum WorkerTask {
     GetPlaylistTracksInfo(Playlist),
     GetRecommendationsForPlaylist(Playlist),
 
+    AddTrackToPlaylist(String, String),
     RemoveTrackFromPlaylist(String, String)
 }
 
@@ -204,8 +205,13 @@ impl SpotifyWorker {
                             self.worker_result_tx.send(WorkerResult::PlaylistRecommendations(result)).unwrap();
                         }
                     }
-                    WorkerTask::RemoveTrackFromPlaylist(playlist, track) => {
-                        if self.remove_track_from_playlist_task(playlist, track).await.is_err() {
+                    WorkerTask::AddTrackToPlaylist(track, playlist) => {
+                        if self.add_track_to_playlist_task(track, playlist).await.is_err() {
+                            // TODO: Pass the error to the UI and show to user.
+                        }
+                    }
+                    WorkerTask::RemoveTrackFromPlaylist(track, playlist) => {
+                        if self.remove_track_from_playlist_task(track, playlist).await.is_err() {
                             // TODO: Pass the error to the UI and show to user.
                         }
                     }
@@ -622,7 +628,17 @@ impl SpotifyWorker {
         Ok(())
     }
 
-    pub async fn remove_track_from_playlist_task(&mut self, playlist: String, track: String) -> Result<()> {
+    pub async fn add_track_to_playlist_task(&mut self, track: String, playlist: String) -> Result<()> {
+        let api_client = self.api_client.as_mut().ok_or(error::WorkerError::NoAPIClient)?;
+        let track_id = TrackId::from_uri(&track).map_err(|_| error::WorkerError::BadSpotifyId)?;
+        let playlist_id = PlaylistId::from_uri(&playlist).map_err(|_| error::WorkerError::BadSpotifyId)?;
+
+        let items: Vec<&dyn PlayableId> = vec![&track_id];
+
+        api_client.playlist_add_items(&playlist_id, items, None).await.map(|_| Ok(()))?
+    }
+
+    pub async fn remove_track_from_playlist_task(&mut self, track: String, playlist: String) -> Result<()> {
         let api_client = self.api_client.as_mut().ok_or(error::WorkerError::NoAPIClient)?;
         let playlist_id = PlaylistId::from_uri(&playlist).map_err(|_| error::WorkerError::BadSpotifyId)?;
         let track_id = TrackId::from_uri(&track).map_err(|_| error::WorkerError::BadSpotifyId)?;

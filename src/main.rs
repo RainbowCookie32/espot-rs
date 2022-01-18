@@ -735,12 +735,20 @@ impl EspotApp {
                                 }
                             };
 
-                            self.v.playback_status.paused = false;
-                            self.v.playback_status.started = true;
                             start_playlist = Some((tracks, track.clone()));
-
                             ui.close_menu();
                         }
+
+                        ui.menu_button("Add to playlist", | ui | {
+                            for (id, playlist) in self.v.user_playlists.iter() {
+                                if ui.selectable_label(false, playlist.name.as_str()).clicked() {
+                                    self.send_worker_msg(WorkerTask::AddTrackToPlaylist(track.id.clone(), id.clone()));
+                                    self.send_worker_msg(WorkerTask::GetUserPlaylists);
+
+                                    ui.close_menu();
+                                }
+                            }
+                        });
 
                         if ui.selectable_label(false, "Remove").clicked() {
                             let id = {
@@ -768,7 +776,7 @@ impl EspotApp {
                 if is_user_playlist {
                     self.v.fetching_user_playlists = true;
                     self.v.playback_status.current_playlist_tracks.remove(track_idx);
-                    self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(playlist, track_id));
+                    self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(track_id, playlist));
                     self.send_worker_msg(WorkerTask::GetUserPlaylists);
                 }
                 else {
@@ -777,6 +785,8 @@ impl EspotApp {
             }
 
             if let Some((playlist, track)) = start_playlist {
+                self.v.playback_status.paused = false;
+                self.v.playback_status.started = true;
                 self.send_player_msg(PlayerControl::StartPlaylistAtTrack(playlist, track));
             }
 
