@@ -114,7 +114,7 @@ impl epi::App for EspotApp {
 
             #[cfg(target_os = "linux")]
             #[cfg(not(debug_assertions))]
-            dbus::start_dbus_server(state_rx_dbus, control_tx.clone());
+            crate::dbus::start_dbus_server(state_rx_dbus, control_tx.clone());
 
             self.v.state_rx = Some(state_rx);
             self.v.control_tx = Some(control_tx);
@@ -602,11 +602,20 @@ impl EspotApp {
                         let available_width = cols[0].available_width();
                         let trimmed = utils::trim_string(available_width, glyph_width, &mut track_name);
 
+                        let checked = {
+                            if let Some(t) = self.v.playback_status.current_track.as_ref() {
+                                t.id == track.id
+                            }
+                            else {
+                                false
+                            }
+                        };
+
                         if trimmed {
-                            cols[0].selectable_label(false, track_name).on_hover_text(&track.name)
+                            cols[0].selectable_label(checked, track_name).on_hover_text(&track.name)
                         }
                         else {
-                            cols[0].selectable_label(false, track_name)
+                            cols[0].selectable_label(checked, track_name)
                         }
                     };
 
