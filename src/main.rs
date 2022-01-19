@@ -190,76 +190,7 @@ impl epi::App for EspotApp {
             self.draw_login_screen(ctx);
         }
 
-        if let Some(rx) = self.v.state_rx.as_mut() {
-            if let Ok(state) = rx.try_recv() {
-                match state {
-                    PlayerStateUpdate::Paused => {
-                        self.v.playback_status.paused = true;
-                    }
-                    PlayerStateUpdate::Resumed => {
-                        self.v.playback_status.paused = false;
-                    }
-                    PlayerStateUpdate::Stopped => {
-                        self.v.playback_status.current_track = None;
-
-                        if let Some(id) = self.v.texture_album_cover {
-                            frame.free_texture(id);
-                            self.v.texture_album_cover = None;
-                        }
-                    }
-                    PlayerStateUpdate::EndOfTrack(track) => {
-                        self.v.playback_status.paused = false;
-                        self.v.playback_status.current_track = Some(track);
-
-                        if let Some(id) = self.v.texture_album_cover {
-                            frame.free_texture(id);
-                            self.v.texture_album_cover = None;
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(rx) = self.v.worker_result_rx.as_mut() {
-            if let Ok(worker_res) = rx.try_recv() {
-                match worker_res {
-                    WorkerResult::Login(result) => {
-                        if result {
-                            self.v.logged_in = true;
-                        }
-    
-                        self.v.login_password = String::new();
-                    }
-                    WorkerResult::UserPlaylists(playlists) => {
-                        self.v.user_playlists = playlists;
-                        self.v.fetching_user_playlists = false;
-                        
-                        for id in self.v.textures_user_playlists_covers.iter().flatten() {
-                            frame.free_texture(*id);
-                        }
-                        
-                        self.v.textures_user_playlists_covers = vec![None; self.v.user_playlists.len()];
-                    }
-                    WorkerResult::FeaturedPlaylists(playlists) => {
-                        self.v.featured_playlists = playlists;
-                        self.v.fetching_featured_playlists = false;
-                        
-                        for id in self.v.textures_featured_playlists_covers.iter().flatten() {
-                            frame.free_texture(*id);
-                        }
-
-                        self.v.textures_featured_playlists_covers = vec![None; self.v.featured_playlists.len()];
-                    }
-                    WorkerResult::PlaylistTrackInfo(tracks) => {
-                        self.v.playback_status.current_playlist_tracks = tracks;
-                    }
-                    WorkerResult::PlaylistRecommendations(tracks) => {
-                        self.v.playback_status.recommendations = tracks;
-                        self.v.fetching_playlist_recommendations = false;
-                    }
-                }
-            }
-        }
+        self.handle_messages(frame);
 
         // TODO: Workaround for not being able to figure out how to request a repaint
         //       from the worker thread. Burns more resources than needed.
@@ -794,26 +725,77 @@ impl EspotApp {
         });
     }
 
-    fn trim_string(available_width: f32, glyph_width: f32, text: String) -> (bool, String) {
-        let mut text = text;
-        let mut text_chars: Vec<char> = text.chars().collect();
+    fn handle_messages(&mut self, frame: &epi::Frame) {
+        if let Some(rx) = self.v.state_rx.as_mut() {
+            if let Ok(state) = rx.try_recv() {
+                match state {
+                    PlayerStateUpdate::Paused => {
+                        self.v.playback_status.paused = true;
+                    }
+                    PlayerStateUpdate::Resumed => {
+                        self.v.playback_status.paused = false;
+                    }
+                    PlayerStateUpdate::Stopped => {
+                        self.v.playback_status.current_track = None;
 
-        let mut trimmed = false;
+                        if let Some(id) = self.v.texture_album_cover {
+                            frame.free_texture(id);
+                            self.v.texture_album_cover = None;
+                        }
+                    }
+                    PlayerStateUpdate::EndOfTrack(track) => {
+                        self.v.playback_status.paused = false;
+                        self.v.playback_status.current_track = Some(track);
 
-        let max_chars_in_space = (available_width / glyph_width) as usize;
-
-        if text_chars.len() >= max_chars_in_space {
-            while text_chars.len() >= max_chars_in_space {
-                text_chars.pop();
+                        if let Some(id) = self.v.texture_album_cover {
+                            frame.free_texture(id);
+                            self.v.texture_album_cover = None;
+                        }
+                    }
+                }
             }
-            
-            text = text_chars.into_iter().collect();
-            text.push_str("...");
-
-            trimmed = true;
         }
 
-        (trimmed, text)
+        if let Some(rx) = self.v.worker_result_rx.as_mut() {
+            if let Ok(worker_res) = rx.try_recv() {
+                match worker_res {
+                    WorkerResult::Login(result) => {
+                        if result {
+                            self.v.logged_in = true;
+                        }
+    
+                        self.v.login_password = String::new();
+                    }
+                    WorkerResult::UserPlaylists(playlists) => {
+                        self.v.user_playlists = playlists;
+                        self.v.fetching_user_playlists = false;
+                        
+                        for id in self.v.textures_user_playlists_covers.iter().flatten() {
+                            frame.free_texture(*id);
+                        }
+                        
+                        self.v.textures_user_playlists_covers = vec![None; self.v.user_playlists.len()];
+                    }
+                    WorkerResult::FeaturedPlaylists(playlists) => {
+                        self.v.featured_playlists = playlists;
+                        self.v.fetching_featured_playlists = false;
+                        
+                        for id in self.v.textures_featured_playlists_covers.iter().flatten() {
+                            frame.free_texture(*id);
+                        }
+
+                        self.v.textures_featured_playlists_covers = vec![None; self.v.featured_playlists.len()];
+                    }
+                    WorkerResult::PlaylistTrackInfo(tracks) => {
+                        self.v.playback_status.current_playlist_tracks = tracks;
+                    }
+                    WorkerResult::PlaylistRecommendations(tracks) => {
+                        self.v.playback_status.recommendations = tracks;
+                        self.v.fetching_playlist_recommendations = false;
+                    }
+                }
+            }
+        }
     }
 
     fn is_playlist_ready(&self) -> bool {
@@ -888,6 +870,28 @@ impl EspotApp {
         }
 
         result
+    }
+
+    fn trim_string(available_width: f32, glyph_width: f32, text: String) -> (bool, String) {
+        let mut text = text;
+        let mut text_chars: Vec<char> = text.chars().collect();
+
+        let mut trimmed = false;
+
+        let max_chars_in_space = (available_width / glyph_width) as usize;
+
+        if text_chars.len() >= max_chars_in_space {
+            while text_chars.len() >= max_chars_in_space {
+                text_chars.pop();
+            }
+            
+            text = text_chars.into_iter().collect();
+            text.push_str("...");
+
+            trimmed = true;
+        }
+
+        (trimmed, text)
     }
 }
 
