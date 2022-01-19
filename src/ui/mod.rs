@@ -328,7 +328,7 @@ impl EspotApp {
 
             ui.separator();
 
-            ui.collapsing("Playlists", | ui | {
+            let playlists = ui.collapsing("Playlists", | ui | {
                 if !self.v.user_playlists.is_empty() {
                     for (i, (_, p)) in self.v.user_playlists.iter().enumerate() {
                         let checked = {
@@ -384,6 +384,19 @@ impl EspotApp {
                 }
                 else {
                     ui.label("No playlists found...");
+                }
+            });
+
+            playlists.header_response.context_menu(| ui | {
+                if ui.selectable_label(false, "Refresh").clicked() {
+                    self.v.current_panel = CurrentPanel::Home;
+
+                    self.v.user_playlists = Vec::new();
+                    self.v.fetching_user_playlists = true;
+                    self.v.playback_status.current_playlist = None;
+                    self.v.playback_status.current_playlist_tracks = Vec::new();
+
+                    self.send_worker_msg(WorkerTask::GetUserPlaylists);
                 }
             });
 
