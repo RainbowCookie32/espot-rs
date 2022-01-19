@@ -363,18 +363,15 @@ impl EspotApp {
                                 if i != *currently_selected {
                                     self.v.playback_status.current_playlist = Some(i);
                                     self.v.playback_status.current_playlist_tracks = Vec::with_capacity(p.tracks.len());
-
-                                    self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                                 }
                             }
                             else {
                                 self.v.playback_status.current_playlist = Some(i);
                                 self.v.playback_status.current_playlist_tracks = Vec::with_capacity(p.tracks.len());
-
-                                self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                             }
 
                             self.v.current_panel = CurrentPanel::Playlist;
+                            self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                         }
                         else if get_recommendations {
                             self.v.current_panel = CurrentPanel::Recommendations;
