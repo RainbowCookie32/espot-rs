@@ -2,7 +2,6 @@ mod cache;
 mod error;
 
 use nanorand::{Rng, WyRand};
-use futures_lite::StreamExt;
 
 use tokio::runtime::Runtime;
 use tokio::sync::{broadcast, mpsc};
