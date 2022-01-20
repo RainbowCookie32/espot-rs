@@ -287,10 +287,11 @@ impl SpotifyWorker {
                                 };
 
                                 let track = &self.player_tracks_queue[target];
-                                let track_id = SpotifyId::from_uri(&track.id).unwrap();
-    
-                                if let Some(player) = self.spotify_player.as_ref() {
-                                    player.preload(track_id)
+
+                                if let Ok(track_id) = SpotifyId::from_uri(&track.id) {
+                                    if let Some(player) = self.spotify_player.as_ref() {
+                                        player.preload(track_id)
+                                    }
                                 }
                             }
                         }
