@@ -258,37 +258,10 @@ impl SpotifyWorker {
                         }
                     }
                     PlayerControl::NextTrack => {
-                        if let Some(player) = self.spotify_player.as_mut() {
-                            self.player_current_track += 1;
-
-                            if self.player_current_track >= self.player_tracks_queue.len() {
-                                self.player_current_track = 0;
-                            }
-
-                            let track = &self.player_tracks_queue[self.player_current_track];
-                            let track_id = SpotifyId::from_uri(&track.id).unwrap();
-
-                            self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
-
-                            player.load(track_id, true, 0);
-                        }
+                        self.next_track();
                     }
                     PlayerControl::PreviousTrack => {
-                        if let Some(player) = self.spotify_player.as_mut() {
-                            if self.player_current_track == 0 {
-                                self.player_current_track = self.player_tracks_queue.len() - 1;
-                            }
-                            else {
-                                self.player_current_track -= 1;
-                            }
-
-                            let track = &self.player_tracks_queue[self.player_current_track];
-                            let track_id = SpotifyId::from_uri(&track.id).unwrap();
-
-                            self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
-
-                            player.load(track_id, true, 0);
-                        }
+                        self.previous_track();
                     }
                 }
             }
@@ -322,21 +295,7 @@ impl SpotifyWorker {
                             }
                         }
                         PlayerEvent::EndOfTrack { .. } => {
-                            self.player_current_track += 1;
-
-                            if self.player_current_track >= self.player_tracks_queue.len() {
-                                self.player_current_track = 0;
-                            }
-
-                            if let Some(player) = self.spotify_player.as_mut() {
-                                let track = &self.player_tracks_queue[self.player_current_track];
-                                let track_id = SpotifyId::from_uri(&track.id).unwrap();
-
-                                self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
-
-                                player.load(track_id, true, 0);
-                                player.play();
-                            }
+                            self.next_track();
                         }
                         _ => {}
                     }
@@ -582,5 +541,35 @@ impl SpotifyWorker {
         result.append(&mut fetched_tracks);
 
         Ok(result)
+    }
+
+    fn next_track(&mut self) {
+        self.player_current_track += 1;
+
+        if self.player_current_track >= self.player_tracks_queue.len() {
+            self.player_current_track = 0;
+        }
+
+        self.load_current_track();
+    }
+
+    fn previous_track(&mut self) {
+        if self.player_current_track == 0 {
+            self.player_current_track = self.player_tracks_queue.len() - 1;
+        }
+        else {
+            self.player_current_track -= 1;
+        }
+    }
+
+    fn load_current_track(&mut self) {
+        if let Some(player) = self.spotify_player.as_mut() {
+            let track = &self.player_tracks_queue[self.player_current_track];
+
+            if let Ok(track_id) = SpotifyId::from_uri(&track.id) {
+                player.load(track_id, true, 0);
+                self.state_tx.send(PlayerStateUpdate::EndOfTrack(track.clone())).unwrap();
+            }
+        }
     }
 }
