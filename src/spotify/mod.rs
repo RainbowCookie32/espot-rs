@@ -18,7 +18,7 @@ use librespot::playback::player::{Player, PlayerEvent};
 use rspotify::auth_code::AuthCodeSpotify;
 use librespot::metadata::{Playlist, Metadata};
 use rspotify::clients::{OAuthClient, BaseClient};
-use rspotify::model::{Id, TrackId, PlaylistId, PlayableId, ArtistId};
+use rspotify::model::{Id, TrackId, PlaylistId, PlayableId, ArtistId, SimplifiedPlaylist};
 
 use cache::CacheHandler;
 pub use cache::TrackInfo;
@@ -188,7 +188,7 @@ impl SpotifyWorker {
                         }
                     }
                     WorkerTask::GetRecommendationsForPlaylist(playlist) => {
-                        if let Ok(result) = self.get_recommendations_task(playlist).await {
+                        if let Ok(result) = self.get_recommendations_task(playlist, &mut rng).await {
                             // TODO: Pass the error to the UI and show to user.
                             self.worker_result_tx.send(WorkerResult::PlaylistRecommendations(result)).unwrap();
                         }
@@ -399,106 +399,31 @@ impl SpotifyWorker {
         }
     }
 
-    pub async fn fetch_user_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {
-        let mut result = Vec::new();
-        
+    pub async fn fetch_user_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {        
         let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
-        let session = self.spotify_session.as_ref().ok_or(error::WorkerError::NoSpotifySession)?;
+        let playlists = client.current_user_playlists_manual(None, None).await?;
 
-        let mut playlists = client.current_user_playlists();
-
-        while let Ok(item) = playlists.try_next().await {
-            if let Some(playlist) = item {
-                let playlist_uri = playlist.id.uri();
-                let playlist_id = SpotifyId::from_uri(&playlist_uri).map_err(|_| error::WorkerError::BadSpotifyId)?;
-
-                let images: Vec<(u32, String)> = playlist.images
-                    .iter()
-                    .map(| i | {
-                        (i.width.unwrap_or_default(), i.url.clone())
-                    })
-                    .collect()
-                ;
-
-                self.api_cache_handler.cache_cover_image(&playlist_uri, &images).await;
-
-                if let Ok(p) = Playlist::get(session, playlist_id).await {
-                    result.push((playlist.id.to_string(), p));
-                }
-            }
-            else {
-                break;
-            }
-        }
-
-        Ok(result)
+        self.process_playlist_info(playlists.items).await
     }
 
     pub async fn fetch_featured_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {
-        let mut result = Vec::new();
-        
         let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
-        let session = self.spotify_session.as_ref().ok_or(error::WorkerError::NoSpotifySession)?;
+        let featured = client.featured_playlists(None, None, None, Some(5), None).await?;
 
-        let playlists = client.featured_playlists(None, None, None, Some(5), None).await;
-
-        if let Ok(item) = playlists {
-            for playlist in item.playlists.items {
-                let playlist_uri = playlist.id.uri();
-                let playlist_id = SpotifyId::from_uri(&playlist_uri).map_err(|_| error::WorkerError::BadSpotifyId)?;
-
-                let images: Vec<(u32, String)> = playlist.images
-                    .iter()
-                    .map(| i | {
-                        (i.width.unwrap_or_default(), i.url.clone())
-                    })
-                    .collect()
-                ;
-
-                self.api_cache_handler.cache_cover_image(&playlist_uri, &images).await;
-
-                if let Ok(p) = Playlist::get(session, playlist_id).await {
-                    result.push((playlist.id.to_string(), p));
-                }
-            }
-        }
-
-        Ok(result)
+        self.process_playlist_info(featured.playlists.items).await
     }
 
     pub async fn fetch_playlist_tracks_info_task(&mut self, playlist: Playlist) -> Result<()> {
-        let mut tracks = Vec::with_capacity(playlist.tracks.len());
-
-        let tracks_to_fetch: Vec<TrackId> = playlist.tracks.into_iter()
-            // Only fetch tracks with a valid Spotify ID.
-            .filter_map(| id | {
-                TrackId::from_uri(&id.to_uri()).ok()
-            })
-            // And filter out the tracks that we already have cached.
-            .filter(| track | {
-                if let Some(track) = self.api_cache_handler.get_track_info(&track.uri()) {
-                    tracks.push(track);
-                    false
-                }
-                else {
-                    true
-                }
-            })
-            .collect()
-        ;
-
-        let mut fetched_tracks = self.get_tracks_info(&tracks_to_fetch).await?;
-        tracks.append(&mut fetched_tracks);
+        let track_ids = playlist.tracks.into_iter().map(|t| t.to_uri()).collect();
+        let tracks = self.make_track_info_vec(track_ids).await?;
 
         self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(tracks)).unwrap();
         Ok(())
     }
 
-    pub async fn get_recommendations_task(&mut self, playlist: Playlist) -> Result<Vec<TrackInfo>> {
+    pub async fn get_recommendations_task(&mut self, playlist: Playlist, rng: &mut WyRand) -> Result<Vec<TrackInfo>> {
         let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
 
-        let mut rng = WyRand::new();
-        let mut tracks = Vec::with_capacity(playlist.tracks.len());
         let mut playlist_tracks: Vec<TrackId> = playlist.tracks
             .into_iter()
             .filter_map(| id | {
@@ -524,32 +449,14 @@ impl SpotifyWorker {
             Some(50)
         ).await.unwrap();
 
-        let tracks_to_fetch: Vec<TrackId> = results.tracks.into_iter()
-            // Filter out unavailable tracks.
-            .filter(| track | {
-                track.is_playable.unwrap_or(true)
-            })
-            // Only fetch tracks with a valid Spotify ID.
-            .filter_map(| track | {
-                track.id
-            })
-            // And filter out the tracks that we already have cached.
-            .filter(| track | {
-                if let Some(track) = self.api_cache_handler.get_track_info(&track.uri()) {
-                    tracks.push(track);
-                    false
-                }
-                else {
-                    true
-                }
-            })
+        let tracks = results.tracks
+            .into_iter()
+            .filter_map(| t | t.id)
+            .map(| id | id.uri())
             .collect()
         ;
 
-        let mut fetched_tracks = self.get_tracks_info(&tracks_to_fetch).await?;
-        tracks.append(&mut fetched_tracks);
-
-        Ok(tracks)
+        self.make_track_info_vec(tracks).await
     }
 
     async fn get_tracks_info(&mut self, tracks: &[TrackId]) -> Result<Vec<TrackInfo>> {
@@ -622,5 +529,58 @@ impl SpotifyWorker {
         let track_ids: Vec<&dyn PlayableId> = vec![&track_id];
         
         api_client.playlist_remove_all_occurrences_of_items(&playlist_id, track_ids, None).await.map(|_| Ok(()))?
+    }
+
+    async fn process_playlist_info(&mut self, playlists: Vec<SimplifiedPlaylist>) -> Result<Vec<(String, Playlist)>> {
+        let session = self.spotify_session.as_ref().ok_or(error::WorkerError::NoSpotifySession)?;
+        let mut result = Vec::new();
+
+        for playlist in playlists {
+            let playlist_uri = playlist.id.uri();
+            let playlist_id = SpotifyId::from_uri(&playlist_uri).map_err(|_| error::WorkerError::BadSpotifyId)?;
+
+            let images: Vec<(u32, String)> = playlist.images
+                .iter()
+                .map(| i | {
+                    (i.width.unwrap_or_default(), i.url.clone())
+                })
+                .collect()
+            ;
+
+            self.api_cache_handler.cache_cover_image(&playlist_uri, &images).await;
+
+            if let Ok(p) = Playlist::get(session, playlist_id).await {
+                result.push((playlist.id.to_string(), p));
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn make_track_info_vec(&mut self, tracks: Vec<String>) -> Result<Vec<TrackInfo>> {
+        let mut result = Vec::new();
+
+        let tracks_to_fetch: Vec<TrackId> = tracks.into_iter()
+            // Only fetch tracks with a valid Spotify ID.
+            .filter_map(| uri | {
+                TrackId::from_uri(&uri).ok()
+            })
+            // And filter out the tracks that we already have cached.
+            .filter(| track | {
+                if let Some(track) = self.api_cache_handler.get_track_info(&track.uri()) {
+                    result.push(track);
+                    false
+                }
+                else {
+                    true
+                }
+            })
+            .collect()
+        ;
+
+        let mut fetched_tracks = self.get_tracks_info(&tracks_to_fetch).await?;
+        result.append(&mut fetched_tracks);
+
+        Ok(result)
     }
 }
