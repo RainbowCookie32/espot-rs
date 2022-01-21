@@ -7,8 +7,6 @@ use image::GenericImageView;
 
 
 pub fn create_texture_from_file(frame: &Frame, path: PathBuf) -> Option<TextureId> {
-    // let cover_path = cache_path.join(format!("cover-{}", id));
-
     let buffer = std::fs::read(path).ok()?;
     create_texture_from_bytes(frame, &buffer)
 }
