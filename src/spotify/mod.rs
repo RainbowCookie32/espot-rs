@@ -3,6 +3,7 @@ mod error;
 
 use nanorand::{Rng, WyRand};
 
+use tiny_http::Server;
 use tokio::runtime::Runtime;
 use tokio::sync::{broadcast, mpsc};
 
@@ -313,7 +314,7 @@ impl SpotifyWorker {
         let mut api_client = {
             let api_creds = rspotify::Credentials::from_env().ok_or(error::APILoginError::Credentials)?;
             let api_cfg = rspotify::Config {
-                token_cached: true,
+                token_cached: false,
                 token_refreshing: true,
                 ..Default::default()
             };
@@ -325,7 +326,24 @@ impl SpotifyWorker {
 
         let url = api_client.get_authorize_url(false).unwrap_or_default();
         
-        if api_client.prompt_for_token(&url).await.is_ok() {
+        if !url.is_empty() {
+            let server = Server::http("0.0.0.0:8888").unwrap();
+            let mut code = String::new();
+
+            webbrowser::open(&url)?;
+
+            for request in server.incoming_requests() {
+                if request.url().contains("callback") {
+                    let uri_split = request.url().split('=').collect::<Vec<&str>>()[1];
+                    let uri_split = uri_split.split('&').collect::<Vec<&str>>()[0];
+
+                    code = uri_split.to_string();
+                    break;
+                }
+            }
+            
+            api_client.request_token(&code).await?;
+
             let player_cfg = config::PlayerConfig {
                 gapless: true,
                 normalisation_type: config::NormalisationType::Auto,
