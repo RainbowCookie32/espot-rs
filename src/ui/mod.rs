@@ -397,6 +397,8 @@ impl EspotApp {
                     self.v.playback_status.current_playlist_tracks = Vec::new();
 
                     self.send_worker_msg(WorkerTask::GetUserPlaylists);
+
+                    ui.close_menu();
                 }
             });
 
