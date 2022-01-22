@@ -47,6 +47,7 @@ struct PersistentData {
 struct VolatileData {
     logged_in: bool,
     login_password: String,
+    waiting_for_login_result: bool,
 
     current_panel: CurrentPanel,
 
@@ -221,8 +222,14 @@ impl EspotApp {
 
                 let submitted = (usr_field.lost_focus() || pwd_field.lost_focus()) && ui.input().key_pressed(egui::Key::Enter);
 
-                if ui.button("Log in").clicked() || submitted {
-                    self.send_worker_msg(WorkerTask::Login(self.p.login_username.clone(), self.v.login_password.clone()));
+                if !self.v.waiting_for_login_result {
+                    if ui.button("Log in").clicked() || submitted {
+                        self.v.waiting_for_login_result = true;
+                        self.send_worker_msg(WorkerTask::Login(self.p.login_username.clone(), self.v.login_password.clone()));
+                    }
+                }
+                else {
+                    ui.add(Spinner::new());
                 }
             });
         });
@@ -800,6 +807,7 @@ impl EspotApp {
                         }
     
                         self.v.login_password = String::new();
+                        self.v.waiting_for_login_result = true;
                     }
                     WorkerResult::UserPlaylists(playlists) => {
                         self.v.user_playlists = playlists;
