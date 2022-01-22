@@ -578,6 +578,8 @@ impl SpotifyWorker {
         else {
             self.player_current_track -= 1;
         }
+
+        self.load_current_track();
     }
 
     fn load_current_track(&mut self) {
