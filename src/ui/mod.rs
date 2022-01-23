@@ -337,6 +337,8 @@ impl EspotApp {
 
             let playlists = ui.collapsing("Playlists", | ui | {
                 if !self.v.user_playlists.is_empty() {
+                    let glyph_width = ui.fonts().glyph_width(egui::TextStyle::Body, 'A');
+
                     for (i, (_, p)) in self.v.user_playlists.iter().enumerate() {
                         let checked = {
                             if let Some(selected) = self.v.playback_status.current_playlist.as_ref() {
@@ -347,11 +349,18 @@ impl EspotApp {
                             }
                         };
 
-                        let playlist_label = ui.selectable_label(checked, &p.name);
+                        let mut label = p.name.clone();
+                        let trimmed = utils::trim_string(ui.available_width(), glyph_width, &mut label);
+
+                        let mut playlist_label = ui.selectable_label(checked, label);
                         let label_clicked = playlist_label.clicked();
                         
                         let mut get_recommendations = false;
                         let mut opened_from_ctx_menu = false;
+
+                        if trimmed {
+                            playlist_label = playlist_label.on_hover_text(&p.name);
+                        }
 
                         playlist_label.context_menu(| ui | {
                             if ui.selectable_label(false, "View").clicked() {
@@ -612,9 +621,9 @@ impl EspotApp {
                 cols[2].label("Album");
                 cols[3].label("Duration");
 
+                let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
+                
                 for (track_idx, track) in tracks_iter.enumerate() {
-                    let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
-
                     let track_name_label = {
                         let mut track_name = track.name.clone();
 
