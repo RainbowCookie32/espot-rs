@@ -621,11 +621,20 @@ impl EspotApp {
                 cols[2].label("Album");
                 cols[3].label("Duration");
 
-                let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
-
                 for (track_idx, track) in tracks_iter.enumerate() {
                     let track_name_label = {
                         let mut track_name = track.name.clone();
+
+                        let glyph_width = {
+                            let chars = track_name.chars().collect::<Vec<char>>();
+
+                            if let Some(c) = chars.get(0) {
+                                cols[0].fonts().glyph_width(egui::TextStyle::Body, *c)
+                            }
+                            else {
+                                cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A')
+                            }
+                        };
 
                         let available_width = cols[0].available_width();
                         let trimmed = utils::trim_string(available_width, glyph_width, &mut track_name);
@@ -651,6 +660,17 @@ impl EspotApp {
                         let artists = utils::make_artists_string(&track.artists);
                         let mut artists_string = artists.clone();
 
+                        let glyph_width = {
+                            let chars = artists_string.chars().collect::<Vec<char>>();
+
+                            if let Some(c) = chars.get(0) {
+                                cols[1].fonts().glyph_width(egui::TextStyle::Body, *c)
+                            }
+                            else {
+                                cols[1].fonts().glyph_width(egui::TextStyle::Body, 'A')
+                            }
+                        };
+
                         let available_width = cols[1].available_width();
                         let trimmed = utils::trim_string(available_width, glyph_width, &mut artists_string);
 
@@ -664,6 +684,17 @@ impl EspotApp {
 
                     let _track_album_label = {
                         let mut album_name = track.album_name.clone();
+
+                        let glyph_width = {
+                            let chars = album_name.chars().collect::<Vec<char>>();
+
+                            if let Some(c) = chars.get(0) {
+                                cols[2].fonts().glyph_width(egui::TextStyle::Body, *c)
+                            }
+                            else {
+                                cols[2].fonts().glyph_width(egui::TextStyle::Body, 'A')
+                            }
+                        };
 
                         let available_width = cols[2].available_width();
                         let trimmed = utils::trim_string(available_width, glyph_width, &mut album_name);
@@ -681,6 +712,7 @@ impl EspotApp {
                         let mut duration_string = duration.clone();
 
                         let available_width = cols[3].available_width();
+                        let glyph_width = cols[3].fonts().glyph_width(egui::TextStyle::Body, '0');
                         let trimmed = utils::trim_string(available_width, glyph_width, &mut duration_string);
 
                         if trimmed {
