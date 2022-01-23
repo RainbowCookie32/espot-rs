@@ -622,7 +622,7 @@ impl EspotApp {
                 cols[3].label("Duration");
 
                 let glyph_width = cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A');
-                
+
                 for (track_idx, track) in tracks_iter.enumerate() {
                     let track_name_label = {
                         let mut track_name = track.name.clone();
@@ -816,7 +816,7 @@ impl EspotApp {
                         }
     
                         self.v.login_password = String::new();
-                        self.v.waiting_for_login_result = true;
+                        self.v.waiting_for_login_result = false;
                     }
                     WorkerResult::UserPlaylists(playlists) => {
                         self.v.user_playlists = playlists;
