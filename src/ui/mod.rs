@@ -615,6 +615,7 @@ impl EspotApp {
         });
 
         ui.separator();
+        ui.style_mut().wrap = Some(false);
 
         egui::ScrollArea::vertical().show(ui, | ui | {
             if !self.v.search_waiting_for_results {
