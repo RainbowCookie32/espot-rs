@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
 use librespot::metadata::Playlist;
+use rspotify::model::{SearchResult, SearchType};
 
 use crate::spotify::*;
 use crate::spinner::Spinner;
@@ -14,6 +15,7 @@ use crate::spinner::Spinner;
 #[derive(PartialEq)]
 enum CurrentPanel {
     Home,
+    Search,
     Playlist,
     Recommendations
 }
@@ -43,7 +45,6 @@ struct PersistentData {
     login_username: String
 }
 
-#[derive(Default)]
 struct VolatileData {
     logged_in: bool,
     login_password: String,
@@ -60,6 +61,11 @@ struct VolatileData {
 
     playback_status: PlaybackStatus,
 
+    search_query: String,
+    search_type: SearchType,
+    search_result: Option<SearchResult>,
+    search_waiting_for_results: bool,
+
     state_rx: Option<broadcast::Receiver<PlayerStateUpdate>>,
     control_tx: Option<mpsc::UnboundedSender<PlayerControl>>,
 
@@ -71,6 +77,44 @@ struct VolatileData {
     
     textures_user_playlists_covers: Vec<Option<egui::TextureId>>,
     textures_featured_playlists_covers: Vec<Option<egui::TextureId>>
+}
+
+impl Default for VolatileData {
+    fn default() -> VolatileData {
+        VolatileData {
+            logged_in: false,
+            login_password: String::new(),
+            waiting_for_login_result: false,
+
+            current_panel: CurrentPanel::default(),
+
+            user_playlists: Vec::new(),
+            featured_playlists: Vec::new(),
+
+            fetching_user_playlists: false,
+            fetching_featured_playlists: false,
+            fetching_playlist_recommendations: false,
+
+            playback_status: PlaybackStatus::default(),
+
+            search_query: String::new(),
+            search_type: SearchType::Track,
+            search_result: None,
+            search_waiting_for_results: false,
+
+            state_rx: None,
+            control_tx: None,
+
+            worker_task_tx: None,
+            worker_result_rx: None,
+
+            texture_no_cover: None,
+            texture_album_cover: None,
+    
+            textures_user_playlists_covers: Vec::new(),
+            textures_featured_playlists_covers: Vec::new()
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -247,6 +291,7 @@ impl EspotApp {
         egui::CentralPanel::default().show(ctx, | ui | {
             match &self.v.current_panel {
                 CurrentPanel::Home => self.draw_home_panel(ui),
+                CurrentPanel::Search => self.draw_search_panel(ui),
                 CurrentPanel::Playlist => self.draw_playlist_panel(ui),
                 CurrentPanel::Recommendations => self.draw_recommendations_panel(ui)
             }
@@ -295,8 +340,8 @@ impl EspotApp {
                             if !self.v.playback_status.started {
                                 let tracks = {
                                     match self.v.current_panel {
-                                        CurrentPanel::Home | CurrentPanel::Playlist => self.v.playback_status.current_playlist_tracks.clone(),
                                         CurrentPanel::Recommendations => self.v.playback_status.recommendations.clone(),
+                                        _ => self.v.playback_status.current_playlist_tracks.clone(),
                                     }
                                 };
 
@@ -331,6 +376,12 @@ impl EspotApp {
 
             if ui.selectable_label(self.v.current_panel == CurrentPanel::Home, "Home").clicked() {
                 self.v.current_panel = CurrentPanel::Home;
+            }
+
+            ui.separator();
+
+            if ui.selectable_label(self.v.current_panel == CurrentPanel::Search, "Search").clicked() {
+                self.v.current_panel = CurrentPanel::Search;
             }
 
             ui.separator();
@@ -523,6 +574,185 @@ impl EspotApp {
                     }
                 }
             });
+        });
+    }
+
+    fn draw_search_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(| ui | {
+            ui.label("Search query");
+            ui.text_edit_singleline(&mut self.v.search_query);
+            
+            ui.separator();
+
+            egui::ComboBox::from_id_source("search_kind")
+                .selected_text(format!("{:?}", self.v.search_type))
+                .show_ui(ui, | ui | {
+                    ui.selectable_value(&mut self.v.search_type, SearchType::Album, "Album");
+                    ui.selectable_value(&mut self.v.search_type, SearchType::Artist, "Artist");
+                    ui.selectable_value(&mut self.v.search_type, SearchType::Track, "Track");
+                    ui.selectable_value(&mut self.v.search_type, SearchType::Playlist, "Playlist");
+                    ui.selectable_value(&mut self.v.search_type, SearchType::Show, "Show");
+                })
+            ;
+
+            ui.separator();
+
+            let enabled = !self.v.search_query.is_empty() && !self.v.search_waiting_for_results;
+
+            if ui.add_enabled(enabled, egui::Button::new("Search")).clicked() {
+                self.v.search_result = None;
+                self.v.search_waiting_for_results = true;
+
+                self.send_worker_msg(WorkerTask::Search(self.v.search_query.clone(), self.v.search_type));
+            }
+        });
+
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, | ui | {
+            if !self.v.search_waiting_for_results {
+                if let Some(results) = self.v.search_result.as_ref() {
+                    match results {
+                        SearchResult::Tracks(tracks) => {
+                            ui.columns(4, | cols | {
+                                cols[0].label("Title");
+                                cols[1].label("Artists");
+                                cols[2].label("Album");
+                                cols[3].label("Duration");
+            
+                                for track in tracks.items.iter() {
+                                    let track_id = {
+                                        if let Some(id) = track.id.clone() {
+                                            id
+                                        }
+                                        else {
+                                            continue
+                                        }
+                                    };
+
+                                    let track_name_label = {
+                                        let mut track_name = track.name.clone();
+            
+                                        let glyph_width = {
+                                            let chars = track_name.chars().collect::<Vec<char>>();
+            
+                                            if let Some(c) = chars.get(0) {
+                                                cols[0].fonts().glyph_width(egui::TextStyle::Body, *c)
+                                            }
+                                            else {
+                                                cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A')
+                                            }
+                                        };
+            
+                                        let available_width = cols[0].available_width();
+                                        let trimmed = utils::trim_string(available_width, glyph_width, &mut track_name);
+            
+                                        let checked = {
+                                            if let Some(t) = self.v.playback_status.current_track.as_ref() {
+                                                t.id == track_id.to_string()
+                                            }
+                                            else {
+                                                false
+                                            }
+                                        };
+            
+                                        if trimmed {
+                                            cols[0].selectable_label(checked, track_name).on_hover_text(&track.name)
+                                        }
+                                        else {
+                                            cols[0].selectable_label(checked, track_name)
+                                        }
+                                    };
+            
+                                    let _track_artist_label = {
+                                        let artists = track.artists.iter().map(| a | a.name.clone()).collect::<Vec<String>>();
+                                        let artists = utils::make_artists_string(&artists);
+                                        let mut artists_string = artists.clone();
+            
+                                        let glyph_width = {
+                                            let chars = artists_string.chars().collect::<Vec<char>>();
+            
+                                            if let Some(c) = chars.get(0) {
+                                                cols[1].fonts().glyph_width(egui::TextStyle::Body, *c)
+                                            }
+                                            else {
+                                                cols[1].fonts().glyph_width(egui::TextStyle::Body, 'A')
+                                            }
+                                        };
+            
+                                        let available_width = cols[1].available_width();
+                                        let trimmed = utils::trim_string(available_width, glyph_width, &mut artists_string);
+            
+                                        if trimmed {
+                                            cols[1].selectable_label(false, artists_string).on_hover_text(artists)
+                                        }
+                                        else {
+                                            cols[1].selectable_label(false, artists_string)
+                                        }
+                                    };
+            
+                                    let _track_album_label = {
+                                        let mut album_name = track.album.name.clone();
+            
+                                        let glyph_width = {
+                                            let chars = album_name.chars().collect::<Vec<char>>();
+            
+                                            if let Some(c) = chars.get(0) {
+                                                cols[2].fonts().glyph_width(egui::TextStyle::Body, *c)
+                                            }
+                                            else {
+                                                cols[2].fonts().glyph_width(egui::TextStyle::Body, 'A')
+                                            }
+                                        };
+            
+                                        let available_width = cols[2].available_width();
+                                        let trimmed = utils::trim_string(available_width, glyph_width, &mut album_name);
+            
+                                        if trimmed {
+                                            cols[2].selectable_label(false, album_name).on_hover_text(track.album.name.clone())
+                                        }
+                                        else {
+                                            cols[2].selectable_label(false, album_name)
+                                        }
+                                    };
+            
+                                    let _track_duration_label = {
+                                        let duration_ms = track.duration.as_millis();
+                                        let duration = format!("{}:{:02}", (duration_ms / 1000) / 60, (duration_ms / 1000) % 60);
+                                        let mut duration_string = duration.clone();
+            
+                                        let available_width = cols[3].available_width();
+                                        let glyph_width = cols[3].fonts().glyph_width(egui::TextStyle::Body, '0');
+                                        let trimmed = utils::trim_string(available_width, glyph_width, &mut duration_string);
+            
+                                        if trimmed {
+                                            cols[3].selectable_label(false, duration_string).on_hover_text(duration)
+                                        }
+                                        else {
+                                            cols[3].selectable_label(false, duration_string)
+                                        }
+                                    };
+            
+                                    track_name_label.context_menu(| ui | {
+                                        ui.menu_button("Add to playlist", | ui | {
+                                            for (id, playlist) in self.v.user_playlists.iter() {
+                                                if ui.selectable_label(false, playlist.name.as_str()).clicked() {
+                                                    self.send_worker_msg(WorkerTask::AddTrackToPlaylist(track_id.to_string(), id.clone()));
+                                                    self.send_worker_msg(WorkerTask::GetUserPlaylists);
+            
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                        });
+                                    });
+                                }
+                            });
+                        }
+                        SearchResult::Artists(_) => {},
+                        _ => {},
+                    }
+                }
+            }
         });
     }
 
@@ -870,6 +1100,10 @@ impl EspotApp {
 
                         self.v.textures_featured_playlists_covers = vec![None; self.v.featured_playlists.len()];
                     }
+                    WorkerResult::SearchResult(result) => {
+                        self.v.search_result = Some(result);
+                        self.v.search_waiting_for_results = false;
+                    }
                     WorkerResult::PlaylistTrackInfo(tracks) => {
                         self.v.playback_status.current_playlist_tracks = tracks;
                     }
@@ -884,7 +1118,7 @@ impl EspotApp {
 
     fn is_playlist_ready(&self) -> bool {
         match self.v.current_panel {
-            CurrentPanel::Home => false,
+            CurrentPanel::Home | CurrentPanel::Search => false,
             CurrentPanel::Playlist => {
                 if let Some(i) = self.v.playback_status.current_playlist.as_ref() {
                     if let Some((_, p)) = self.v.user_playlists.get(*i) {

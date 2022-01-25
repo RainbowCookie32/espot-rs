@@ -12,13 +12,14 @@ use librespot::core::config::SessionConfig;
 use librespot::core::spotify_id::SpotifyId;
 use librespot::core::authentication::Credentials;
 
+use librespot::metadata::{Playlist, Metadata};
+
 use librespot::playback::config;
 use librespot::playback::player::{Player, PlayerEvent};
 
 use rspotify::auth_code::AuthCodeSpotify;
-use librespot::metadata::{Playlist, Metadata};
 use rspotify::clients::{OAuthClient, BaseClient};
-use rspotify::model::{Id, TrackId, PlaylistId, PlayableId, ArtistId, SimplifiedPlaylist};
+use rspotify::model::{Id, TrackId, PlaylistId, PlayableId, ArtistId, SimplifiedPlaylist, SearchResult, SearchType};
 
 use cache::CacheHandler;
 pub use cache::TrackInfo;
@@ -48,6 +49,8 @@ pub enum WorkerTask {
     GetPlaylistTracksInfo(Playlist),
     GetRecommendationsForPlaylist(Playlist),
 
+    Search(String, SearchType),
+
     AddTrackToPlaylist(String, String),
     RemoveTrackFromPlaylist(String, String)
 }
@@ -58,6 +61,8 @@ pub enum WorkerResult {
 
     UserPlaylists(Vec<(String, Playlist)>),
     FeaturedPlaylists(Vec<(String, Playlist)>),
+
+    SearchResult(SearchResult),
 
     PlaylistTrackInfo(Vec<TrackInfo>),
     PlaylistRecommendations(Vec<TrackInfo>)
@@ -193,6 +198,12 @@ impl SpotifyWorker {
                             self.worker_result_tx.send(WorkerResult::PlaylistRecommendations(result)).unwrap();
                         }
                     }
+                    WorkerTask::Search(query, search_type) => {
+                        if let Ok(result) = self.search(query, search_type).await {
+                            // TODO: Pass the error to the UI and show to user.
+                            self.worker_result_tx.send(WorkerResult::SearchResult(result)).unwrap();
+                        }
+                    }
                     WorkerTask::AddTrackToPlaylist(track, playlist) => {
                         if self.add_track_to_playlist_task(track, playlist).await.is_err() {
                             // TODO: Pass the error to the UI and show to user.
@@ -319,7 +330,13 @@ impl SpotifyWorker {
                 ..Default::default()
             };
 
-            let api_oauth = rspotify::OAuth::from_env(rspotify::scopes!("playlist-read-private")).ok_or(error::APILoginError::OAuth)?;
+            let scopes = rspotify::scopes!(
+                "playlist-read-private",
+                "playlist-modify-public",
+                "playlist-modify-private"
+            );
+
+            let api_oauth = rspotify::OAuth::from_env(scopes).ok_or(error::APILoginError::OAuth)?;
 
             AuthCodeSpotify::with_config(api_creds, api_oauth, api_cfg)
         };
@@ -396,6 +413,11 @@ impl SpotifyWorker {
 
         self.worker_result_tx.send(WorkerResult::PlaylistTrackInfo(tracks)).unwrap();
         Ok(())
+    }
+
+    async fn search(&mut self, query: String, search_type: SearchType) -> Result<SearchResult> {
+        let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
+        Ok(client.search(&query, &search_type, None, None, None, None).await?)
     }
 
     pub async fn get_recommendations_task(&mut self, playlist: Playlist, rng: &mut WyRand) -> Result<Vec<TrackInfo>> {
