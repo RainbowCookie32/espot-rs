@@ -580,26 +580,33 @@ impl EspotApp {
     fn draw_search_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
             ui.label("Search query");
-            ui.text_edit_singleline(&mut self.v.search_query);
+            
+            let text_input = ui.text_edit_singleline(&mut self.v.search_query);
             
             ui.separator();
 
             egui::ComboBox::from_id_source("search_kind")
                 .selected_text(format!("{:?}", self.v.search_type))
                 .show_ui(ui, | ui | {
-                    ui.selectable_value(&mut self.v.search_type, SearchType::Album, "Album");
-                    ui.selectable_value(&mut self.v.search_type, SearchType::Artist, "Artist");
                     ui.selectable_value(&mut self.v.search_type, SearchType::Track, "Track");
-                    ui.selectable_value(&mut self.v.search_type, SearchType::Playlist, "Playlist");
-                    ui.selectable_value(&mut self.v.search_type, SearchType::Show, "Show");
+
+                    ui.add_enabled_ui(false, | ui | {
+                        ui.selectable_value(&mut self.v.search_type, SearchType::Album, "Album");
+                        ui.selectable_value(&mut self.v.search_type, SearchType::Artist, "Artist");
+                        ui.selectable_value(&mut self.v.search_type, SearchType::Playlist, "Playlist");
+                        ui.selectable_value(&mut self.v.search_type, SearchType::Show, "Show");
+                    });
                 })
             ;
 
             ui.separator();
 
             let enabled = !self.v.search_query.is_empty() && !self.v.search_waiting_for_results;
+            
+            let button = ui.add_enabled(enabled, egui::Button::new("Search"));
+            let submitted = button.clicked() || (text_input.lost_focus() & ui.input().key_pressed(egui::Key::Enter));
 
-            if ui.add_enabled(enabled, egui::Button::new("Search")).clicked() {
+            if submitted {
                 self.v.search_result = None;
                 self.v.search_waiting_for_results = true;
 
