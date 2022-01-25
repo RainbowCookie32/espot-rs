@@ -157,7 +157,7 @@ impl SpotifyWorker {
         (worker_task_tx, worker_result_rx, state_rx, state_rx_2, control_tx)
     }
 
-    pub async fn process_events(&mut self) {
+    async fn process_events(&mut self) {
         let mut rng = WyRand::new();
         let mut player_events = None;
 
@@ -318,7 +318,7 @@ impl SpotifyWorker {
         }
     }
 
-    pub async fn login_task(&mut self, username: String, password: String) -> Result<mpsc::UnboundedReceiver<PlayerEvent>> {
+    async fn login_task(&mut self, username: String, password: String) -> Result<mpsc::UnboundedReceiver<PlayerEvent>> {
         let session_cfg = SessionConfig::default();
         let session_creds = Credentials::with_password(username, password);
 
@@ -393,21 +393,21 @@ impl SpotifyWorker {
         }
     }
 
-    pub async fn fetch_user_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {        
+    async fn fetch_user_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {        
         let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
         let playlists = client.current_user_playlists_manual(None, None).await?;
 
         self.process_playlist_info(playlists.items).await
     }
 
-    pub async fn fetch_featured_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {
+    async fn fetch_featured_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {
         let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
         let featured = client.featured_playlists(None, None, None, Some(5), None).await?;
 
         self.process_playlist_info(featured.playlists.items).await
     }
 
-    pub async fn fetch_playlist_tracks_info_task(&mut self, playlist: Playlist) -> Result<()> {
+    async fn fetch_playlist_tracks_info_task(&mut self, playlist: Playlist) -> Result<()> {
         let track_ids = playlist.tracks.into_iter().map(|t| t.to_uri()).collect();
         let tracks = self.make_track_info_vec(track_ids).await?;
 
@@ -420,7 +420,7 @@ impl SpotifyWorker {
         Ok(client.search(&query, &search_type, None, None, None, None).await?)
     }
 
-    pub async fn get_recommendations_task(&mut self, playlist: Playlist, rng: &mut WyRand) -> Result<Vec<TrackInfo>> {
+    async fn get_recommendations_task(&mut self, playlist: Playlist, rng: &mut WyRand) -> Result<Vec<TrackInfo>> {
         let client = self.api_client.as_ref().ok_or(error::WorkerError::NoAPIClient)?;
 
         let mut playlist_tracks: Vec<TrackId> = playlist.tracks
@@ -483,7 +483,7 @@ impl SpotifyWorker {
         Ok(result)
     }
 
-    pub fn start_playlist_task(&mut self, tracks: Vec<TrackInfo>) -> Result<()> {
+    fn start_playlist_task(&mut self, tracks: Vec<TrackInfo>) -> Result<()> {
         let player = self.spotify_player.as_mut().ok_or(error::WorkerError::NoSpotifyPlayer)?;
         let track = tracks[0].clone();
         let track_id = SpotifyId::from_uri(&track.id).map_err(|_| error::WorkerError::BadSpotifyId)?;
@@ -497,7 +497,7 @@ impl SpotifyWorker {
         Ok(())
     }
 
-    pub fn start_playlist_at_idx_task(&mut self, tracks: Vec<TrackInfo>, idx: usize) -> Result<()> {
+    fn start_playlist_at_idx_task(&mut self, tracks: Vec<TrackInfo>, idx: usize) -> Result<()> {
         let player = self.spotify_player.as_mut().ok_or(error::WorkerError::NoSpotifyPlayer)?;
         let track = tracks[idx].clone();
         let track_id = SpotifyId::from_uri(&track.id).map_err(|_| error::WorkerError::BadSpotifyId)?;
@@ -511,7 +511,7 @@ impl SpotifyWorker {
         Ok(())
     }
 
-    pub async fn add_track_to_playlist_task(&mut self, track: String, playlist: String) -> Result<()> {
+    async fn add_track_to_playlist_task(&mut self, track: String, playlist: String) -> Result<()> {
         let api_client = self.api_client.as_mut().ok_or(error::WorkerError::NoAPIClient)?;
         let track_id = TrackId::from_uri(&track).map_err(|_| error::WorkerError::BadSpotifyId)?;
         let playlist_id = PlaylistId::from_uri(&playlist).map_err(|_| error::WorkerError::BadSpotifyId)?;
@@ -521,7 +521,7 @@ impl SpotifyWorker {
         api_client.playlist_add_items(&playlist_id, items, None).await.map(|_| Ok(()))?
     }
 
-    pub async fn remove_track_from_playlist_task(&mut self, track: String, playlist: String) -> Result<()> {
+    async fn remove_track_from_playlist_task(&mut self, track: String, playlist: String) -> Result<()> {
         let api_client = self.api_client.as_mut().ok_or(error::WorkerError::NoAPIClient)?;
         let playlist_id = PlaylistId::from_uri(&playlist).map_err(|_| error::WorkerError::BadSpotifyId)?;
         let track_id = TrackId::from_uri(&track).map_err(|_| error::WorkerError::BadSpotifyId)?;
