@@ -12,12 +12,24 @@ use rspotify::model::{SearchResult, SearchType};
 use crate::spotify::*;
 use crate::spinner::Spinner;
 
-#[derive(PartialEq)]
 enum CurrentPanel {
     Home,
-    Search,
-    Playlist,
-    Recommendations
+    Search { query: String, search_type: SearchType, result: Option<SearchResult>, tracks_info: Vec<TrackInfo>, waiting_for_info: bool },
+    Playlist { id: String, data: Playlist, tracks_info: Vec<TrackInfo>, waiting_for_info: bool },
+    Recommendations { tracks_info: Vec<TrackInfo>, waiting_for_info: bool }
+}
+
+// PartialEq on CurrentPanel is only used to determine which panel is selected,
+// checking their fields' equivalences is irrelevant.
+impl PartialEq for CurrentPanel {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (CurrentPanel::Search { .. }, CurrentPanel::Search { .. }) => true,
+            (CurrentPanel::Playlist { .. }, CurrentPanel::Playlist { .. }) => true,
+            (CurrentPanel::Recommendations { .. }, CurrentPanel::Recommendations { .. }) => true,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
 }
 
 impl Default for CurrentPanel {
@@ -31,12 +43,7 @@ struct PlaybackStatus {
     paused: bool,
     started: bool,
 
-    current_track: Option<TrackInfo>,
-    
-    current_playlist: Option<usize>,
-    current_playlist_tracks: Vec<TrackInfo>,
-
-    recommendations: Vec<TrackInfo>
+    current_track: Option<TrackInfo>
 }
 
 #[derive(Deserialize, Serialize)]
@@ -45,6 +52,7 @@ struct PersistentData {
     login_username: String
 }
 
+#[derive(Default)]
 struct VolatileData {
     logged_in: bool,
     login_password: String,
@@ -57,16 +65,8 @@ struct VolatileData {
 
     fetching_user_playlists: bool,
     fetching_featured_playlists: bool,
-    fetching_playlist_recommendations: bool,
 
     playback_status: PlaybackStatus,
-
-    search_query: String,
-    search_type: SearchType,
-    search_waiting_for_results: bool,
-
-    search_result: Option<SearchResult>,
-    search_result_tracks: Vec<TrackInfo>,
 
     state_rx: Option<broadcast::Receiver<PlayerStateUpdate>>,
     control_tx: Option<mpsc::UnboundedSender<PlayerControl>>,
@@ -81,46 +81,6 @@ struct VolatileData {
     textures_featured_playlists_covers: Vec<Option<egui::TextureId>>
 }
 
-impl Default for VolatileData {
-    fn default() -> VolatileData {
-        VolatileData {
-            logged_in: false,
-            login_password: String::new(),
-            waiting_for_login_result: false,
-
-            current_panel: CurrentPanel::default(),
-
-            user_playlists: Vec::new(),
-            featured_playlists: Vec::new(),
-
-            fetching_user_playlists: false,
-            fetching_featured_playlists: false,
-            fetching_playlist_recommendations: false,
-
-            playback_status: PlaybackStatus::default(),
-
-            search_query: String::new(),
-            search_type: SearchType::Track,
-            search_waiting_for_results: false,
-
-            search_result: None,
-            search_result_tracks: Vec::new(),
-
-            state_rx: None,
-            control_tx: None,
-
-            worker_task_tx: None,
-            worker_result_rx: None,
-
-            texture_no_cover: None,
-            texture_album_cover: None,
-    
-            textures_user_playlists_covers: Vec::new(),
-            textures_featured_playlists_covers: Vec::new()
-        }
-    }
-}
-
 #[derive(Deserialize, Serialize)]
 pub struct EspotApp {
     p: PersistentData,
@@ -130,10 +90,8 @@ pub struct EspotApp {
 
 impl Default for EspotApp {
     fn default() -> EspotApp {
-        let cache_path = dirs::cache_dir().unwrap().join("espot-rs");
-
         let p = PersistentData {
-            cache_path,
+            cache_path: dirs::cache_dir().unwrap().join("espot-rs"),
             login_username: String::new()
         };
 
@@ -156,8 +114,6 @@ impl epi::App for EspotApp {
             *self = epi::get_value(storage, epi::APP_KEY).unwrap_or_default()
         }
 
-        self.v.playback_status.paused = true;
-
         if self.v.worker_task_tx.is_none() {
             let (worker_task_tx, worker_result_rx, state_rx, state_rx_dbus, control_tx) = SpotifyWorker::start();
 
@@ -172,6 +128,7 @@ impl epi::App for EspotApp {
             self.v.worker_result_rx = Some(worker_result_rx);
         }
 
+        self.v.playback_status.paused = true;
         self.p.cache_path = dirs::cache_dir().unwrap().join("espot-rs");
 
         let mut definitions = egui::FontDefinitions::default();
@@ -295,9 +252,9 @@ impl EspotApp {
         egui::CentralPanel::default().show(ctx, | ui | {
             match &self.v.current_panel {
                 CurrentPanel::Home => self.draw_home_panel(ui),
-                CurrentPanel::Search => self.draw_search_panel(ui),
-                CurrentPanel::Playlist => self.draw_playlist_panel(ui),
-                CurrentPanel::Recommendations => self.draw_recommendations_panel(ui)
+                CurrentPanel::Search { .. } => self.draw_search_panel(ui),
+                CurrentPanel::Playlist { .. } => self.draw_playlist_panel(ui),
+                CurrentPanel::Recommendations { .. } => self.draw_recommendations_panel(ui)
             }
         });
     }
@@ -343,9 +300,11 @@ impl EspotApp {
                         if ui.button(button_label).clicked() {
                             if !self.v.playback_status.started {
                                 let tracks = {
-                                    match self.v.current_panel {
-                                        CurrentPanel::Recommendations => self.v.playback_status.recommendations.clone(),
-                                        _ => self.v.playback_status.current_playlist_tracks.clone(),
+                                    match &self.v.current_panel {
+                                        CurrentPanel::Search { tracks_info, .. } => tracks_info.clone(),
+                                        CurrentPanel::Playlist { tracks_info, .. } => tracks_info.clone(),
+                                        CurrentPanel::Recommendations { tracks_info, .. } => tracks_info.clone(),
+                                        _ => return
                                     }
                                 };
 
@@ -384,8 +343,18 @@ impl EspotApp {
 
             ui.separator();
 
-            if ui.selectable_label(self.v.current_panel == CurrentPanel::Search, "Search").clicked() {
-                self.v.current_panel = CurrentPanel::Search;
+            {
+                let checked = matches!(self.v.current_panel, CurrentPanel::Search { .. });
+
+                if ui.selectable_label(checked, "Search").clicked() {
+                    self.v.current_panel = CurrentPanel::Search {
+                        query: String::new(),
+                        search_type: SearchType::Track,
+                        result: None,
+                        tracks_info: Vec::new(),
+                        waiting_for_info: false
+                    };
+                }
             }
 
             ui.separator();
@@ -394,13 +363,11 @@ impl EspotApp {
                 if !self.v.user_playlists.is_empty() {
                     let glyph_width = ui.fonts().glyph_width(egui::TextStyle::Body, 'A');
 
-                    for (i, (_, p)) in self.v.user_playlists.iter().enumerate() {
+                    for (_id, p) in self.v.user_playlists.iter() {
                         let checked = {
-                            if let Some(selected) = self.v.playback_status.current_playlist.as_ref() {
-                                self.v.current_panel == CurrentPanel::Playlist && i == *selected
-                            }
-                            else {
-                                false
+                            match &self.v.current_panel {
+                                CurrentPanel::Playlist { id, .. } => id == _id,
+                                _ => false
                             }
                         };
 
@@ -430,24 +397,20 @@ impl EspotApp {
                         });
 
                         if label_clicked || opened_from_ctx_menu {
-                            if let Some(currently_selected) = self.v.playback_status.current_playlist.as_ref() {
-                                if i != *currently_selected {
-                                    self.v.playback_status.current_playlist = Some(i);
-                                    self.v.playback_status.current_playlist_tracks = Vec::with_capacity(p.tracks.len());
-                                }
-                            }
-                            else {
-                                self.v.playback_status.current_playlist = Some(i);
-                                self.v.playback_status.current_playlist_tracks = Vec::with_capacity(p.tracks.len());
-                            }
+                            self.v.current_panel = CurrentPanel::Playlist {
+                                id: _id.clone(),
+                                data: p.clone(),
+                                tracks_info: Vec::new(),
+                                waiting_for_info: true
+                            };
 
-                            self.v.current_panel = CurrentPanel::Playlist;
                             self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(p.clone()));
                         }
                         else if get_recommendations {
-                            self.v.current_panel = CurrentPanel::Recommendations;
-                            self.v.playback_status.recommendations = Vec::new();
-                            self.v.fetching_playlist_recommendations = true;
+                            self.v.current_panel = CurrentPanel::Recommendations {
+                                tracks_info: Vec::new(),
+                                waiting_for_info: true
+                            };
                             
                             self.send_worker_msg(WorkerTask::GetRecommendationsForPlaylist(p.clone()));
                         }
@@ -464,8 +427,6 @@ impl EspotApp {
 
                     self.v.user_playlists = Vec::new();
                     self.v.fetching_user_playlists = true;
-                    self.v.playback_status.current_playlist = None;
-                    self.v.playback_status.current_playlist_tracks = Vec::new();
 
                     self.send_worker_msg(WorkerTask::GetUserPlaylists);
 
@@ -475,12 +436,12 @@ impl EspotApp {
 
             ui.separator();
 
-            let selected = self.v.current_panel == CurrentPanel::Recommendations;
-            let enabled = !self.v.fetching_playlist_recommendations && self.v.playback_status.recommendations.is_empty();
+            let (selected, empty,  waiting) = match &self.v.current_panel {
+                CurrentPanel::Recommendations { tracks_info, waiting_for_info } => (true, tracks_info.is_empty(), *waiting_for_info),
+                _ => (false, false, true)
+            };
 
-            if ui.add_enabled(!enabled, egui::SelectableLabel::new(selected, "Recommendations")).clicked() {
-                self.v.current_panel = CurrentPanel::Recommendations;
-            }
+            ui.add_enabled(!waiting && !empty, egui::SelectableLabel::new(selected, "Recommendations"));
     }
 
     fn draw_home_panel(&mut self, ui: &mut egui::Ui) {
@@ -496,40 +457,34 @@ impl EspotApp {
 
         egui::ScrollArea::horizontal().id_source("user_playlists_scroll").show(ui, | ui | {
             ui.horizontal(| ui | {
-                for (i, (_, playlist)) in self.v.user_playlists.iter().enumerate() {
+                for (i, (id, playlist)) in self.v.user_playlists.iter().enumerate() {
                     let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
 
-                    if let Some(t) = self.v.textures_user_playlists_covers.get(i) {
-                        if let Some(id) = t {
-                            let button = egui::ImageButton::new(*id, egui::vec2(96.0, 96.0)).tint(tint);
-                            let button = ui.add(button);
-
-                            let text = egui::RichText::new(&playlist.name).strong();
-                            let label = ui.put(button.rect, egui::Label::new(text));
-
-                            if button.clicked() || label.clicked() {
-                                self.v.current_panel = CurrentPanel::Playlist;
-
-                                self.v.playback_status.current_playlist = Some(i);
-                                self.v.playback_status.current_playlist_tracks = Vec::with_capacity(playlist.tracks.len());
-                                self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(playlist.clone()));
-                            }
+                    let texture_id = {
+                        if let Some(Some(text_id)) = self.v.textures_user_playlists_covers.get(i)  {
+                            text_id
                         }
-                    }
-                    else if let Some(id) = self.v.texture_no_cover.as_ref() {
-                        let button = egui::ImageButton::new(*id, egui::vec2(96.0, 96.0)).tint(tint);
-                        let button = ui.add(button);
-
-                        let text = egui::RichText::new(&playlist.name).strong();
-                        let label = ui.put(button.rect, egui::Label::new(text));
-
-                        if button.clicked() || label.clicked() {
-                            self.v.current_panel = CurrentPanel::Playlist;
-
-                            self.v.playback_status.current_playlist = Some(i);
-                            self.v.playback_status.current_playlist_tracks = Vec::with_capacity(playlist.tracks.len());
-                            self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(playlist.clone()));
+                        else if let Some(text_id) = self.v.texture_no_cover.as_ref() {
+                            text_id
                         }
+                        else {
+                            return;
+                        }
+                    };
+
+                    let button = ui.add(egui::ImageButton::new(*texture_id, egui::vec2(96.0, 96.0)).tint(tint));
+                    let text = egui::RichText::new(&playlist.name).strong();
+                    let label = ui.put(button.rect, egui::Label::new(text));
+
+                    if button.clicked() || label.clicked() {
+                        self.v.current_panel = CurrentPanel::Playlist {
+                            id: id.clone(),
+                            data: playlist.clone(),
+                            tracks_info: Vec::new(),
+                            waiting_for_info: true
+                        };
+
+                        self.send_worker_msg(WorkerTask::GetPlaylistTracksInfo(playlist.clone()));
                     }
                 }
             });
@@ -552,29 +507,24 @@ impl EspotApp {
                 for (i, (_, playlist)) in self.v.featured_playlists.iter().enumerate() {
                     let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
 
-                    if let Some(t) = self.v.textures_featured_playlists_covers.get(i) {
-                        if let Some(id) = t {
-                            let button = egui::ImageButton::new(*id, egui::vec2(96.0, 96.0)).tint(tint);
-                            let button = ui.add(button);
+                    let texture_id = {
+                        if let Some(Some(text_id)) = self.v.textures_featured_playlists_covers.get(i)  {
+                            text_id
+                        }
+                        else if let Some(text_id) = self.v.texture_no_cover.as_ref() {
+                            text_id
+                        }
+                        else {
+                            return;
+                        }
+                    };
 
-                            let text = egui::RichText::new(&playlist.name).strong();
-                            let label = ui.put(button.rect, egui::Label::new(text));
+                    let button = ui.add(egui::ImageButton::new(*texture_id, egui::vec2(96.0, 96.0)).tint(tint));
+                    let text = egui::RichText::new(&playlist.name).strong();
+                    let label = ui.put(button.rect, egui::Label::new(text));
 
-                            if button.clicked() || label.clicked() {
+                    if button.clicked() || label.clicked() {
                                 
-                            }
-                        }
-                    }
-                    else if let Some(id) = self.v.texture_no_cover.as_ref() {
-                        let button = egui::ImageButton::new(*id, egui::vec2(96.0, 96.0)).tint(tint);
-                        let button = ui.add(button);
-
-                        let text = egui::RichText::new(&playlist.name).strong();
-                        let label = ui.put(button.rect, egui::Label::new(text));
-
-                        if button.clicked() || label.clicked() {
-                            
-                        }
                     }
                 }
             });
@@ -584,37 +534,50 @@ impl EspotApp {
     fn draw_search_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
             ui.label("Search query");
+
+            let submitted = {
+                if let CurrentPanel::Search { query, search_type, result, waiting_for_info, .. } = &mut self.v.current_panel {
+                    let lost_focus = ui.text_edit_singleline(query).lost_focus();
+
+                    ui.separator();
+
+                    egui::ComboBox::from_id_source("search_kind")
+                        .selected_text(format!("{:?}", search_type))
+                        .show_ui(ui, | ui | {
+                            ui.selectable_value(search_type, SearchType::Track, "Track");
+        
+                            ui.add_enabled_ui(false, | ui | {
+                                ui.selectable_value(search_type, SearchType::Album, "Album");
+                                ui.selectable_value(search_type, SearchType::Artist, "Artist");
+                                ui.selectable_value(search_type, SearchType::Playlist, "Playlist");
+                                ui.selectable_value(search_type, SearchType::Show, "Show");
+                            });
+                        })
+                    ;
+        
+                    ui.separator();
+
+                    let enabled = !query.is_empty() && !*waiting_for_info;
             
-            let text_input = ui.text_edit_singleline(&mut self.v.search_query);
-            
-            ui.separator();
+                    let button = ui.add_enabled(enabled, egui::Button::new("Search"));
+                    let submitted = button.clicked() || (lost_focus & ui.input().key_pressed(egui::Key::Enter));
+    
+                    if submitted {
+                        *result = None;
+                        *waiting_for_info = true;
+                    }
 
-            egui::ComboBox::from_id_source("search_kind")
-                .selected_text(format!("{:?}", self.v.search_type))
-                .show_ui(ui, | ui | {
-                    ui.selectable_value(&mut self.v.search_type, SearchType::Track, "Track");
-
-                    ui.add_enabled_ui(false, | ui | {
-                        ui.selectable_value(&mut self.v.search_type, SearchType::Album, "Album");
-                        ui.selectable_value(&mut self.v.search_type, SearchType::Artist, "Artist");
-                        ui.selectable_value(&mut self.v.search_type, SearchType::Playlist, "Playlist");
-                        ui.selectable_value(&mut self.v.search_type, SearchType::Show, "Show");
-                    });
-                })
-            ;
-
-            ui.separator();
-
-            let enabled = !self.v.search_query.is_empty() && !self.v.search_waiting_for_results;
-            
-            let button = ui.add_enabled(enabled, egui::Button::new("Search"));
-            let submitted = button.clicked() || (text_input.lost_focus() & ui.input().key_pressed(egui::Key::Enter));
+                    submitted
+                }
+                else {
+                    false
+                }
+            };
 
             if submitted {
-                self.v.search_result = None;
-                self.v.search_waiting_for_results = true;
-
-                self.send_worker_msg(WorkerTask::Search(self.v.search_query.clone(), self.v.search_type));
+                if let CurrentPanel::Search { query, search_type, .. } = &self.v.current_panel {
+                    self.send_worker_msg(WorkerTask::Search(query.clone(), *search_type));
+                }
             }
         });
 
@@ -622,14 +585,16 @@ impl EspotApp {
         ui.style_mut().wrap = Some(false);
 
         egui::ScrollArea::vertical().show(ui, | ui | {
-            if !self.v.search_waiting_for_results {
-                if let Some(results) = self.v.search_result.as_ref() {
-                    match results {
-                        SearchResult::Tracks(_) => {
-                            self.draw_songs_list(ui);
+            if let CurrentPanel::Search { result, waiting_for_info, .. } = &self.v.current_panel {
+                if !*waiting_for_info {
+                    if let Some(results) = result.as_ref() {
+                        match results {
+                            SearchResult::Tracks(_) => {
+                                self.draw_songs_list(ui);
+                            }
+                            SearchResult::Artists(_) => {},
+                            _ => {},
                         }
-                        SearchResult::Artists(_) => {},
-                        _ => {},
                     }
                 }
             }
@@ -638,30 +603,28 @@ impl EspotApp {
 
     fn draw_playlist_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
-            if let Some(idx) = self.v.playback_status.current_playlist.as_ref() {
-                let (_, playlist) = &self.v.user_playlists[*idx];
-
+            if let CurrentPanel::Playlist { data, tracks_info, .. } = &self.v.current_panel {
                 let label = {
-                    if playlist.tracks.len() == 1 {
-                        format!("{} (1 track)", &playlist.name)
+                    if data.tracks.len() == 1 {
+                        format!("{} (1 track)", &data.name)
                     }
                     else {
-                        format!("{} ({} tracks)", &playlist.name, playlist.tracks.len())
+                        format!("{} ({} tracks)", &data.name, data.tracks.len())
                     }
                 };
 
                 ui.strong(label);
+
+                if !self.is_playlist_ready() {
+                    ui.add(Spinner::new());
+                }
+                else if ui.button("Play").clicked() {
+                    self.v.playback_status.started = true;
+                    self.send_player_msg(PlayerControl::StartPlaylist(tracks_info.clone()));
+                }
             }
             else {
                 ui.strong("Select a playlist on the sidebar...");
-            }
-
-            if self.v.playback_status.current_playlist.is_some() && !self.is_playlist_ready() {
-                ui.add(Spinner::new());
-            }
-            else if ui.button("Play").clicked() {
-                self.v.playback_status.started = true;
-                self.send_player_msg(PlayerControl::StartPlaylist(self.v.playback_status.current_playlist_tracks.clone()));
             }
         });
 
@@ -671,28 +634,30 @@ impl EspotApp {
 
     fn draw_recommendations_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
-            if self.is_playlist_ready() {
-                let tracks = self.v.playback_status.recommendations.len();
-
-                let label = {
-                    if tracks == 1 {
-                        String::from("Recommendations (1 track)")
-                    }
-                    else {
-                        format!("Recommendations ({} tracks)", tracks)
-                    }
-                };
-
-                ui.strong(label);
-            }
-            else {
-                ui.strong("Fetching recommendations...");
-                ui.add(Spinner::new());
-            }
-
-            if ui.button("Play").clicked() {
-                self.v.playback_status.started = true;
-                self.send_player_msg(PlayerControl::StartPlaylist(self.v.playback_status.recommendations.clone()));
+            if let CurrentPanel::Recommendations { tracks_info, waiting_for_info } = &self.v.current_panel {
+                if !waiting_for_info {
+                    let tracks = tracks_info.len();
+    
+                    let label = {
+                        if tracks == 1 {
+                            String::from("Recommendations (1 track)")
+                        }
+                        else {
+                            format!("Recommendations ({} tracks)", tracks)
+                        }
+                    };
+    
+                    ui.strong(label);
+                }
+                else {
+                    ui.strong("Fetching recommendations...");
+                    ui.add(Spinner::new());
+                }
+    
+                if ui.button("Play").clicked() {
+                    self.v.playback_status.started = true;
+                    self.send_player_msg(PlayerControl::StartPlaylist(tracks_info.clone()));
+                }
             }
         });
 
@@ -709,14 +674,17 @@ impl EspotApp {
 
             ui.columns(4, | cols | {
                 let tracks_iter = {
-                    if self.v.current_panel == CurrentPanel::Playlist {
-                        self.v.playback_status.current_playlist_tracks.iter()
-                    }
-                    else if self.v.current_panel == CurrentPanel::Recommendations {
-                        self.v.playback_status.recommendations.iter()
-                    }
-                    else {
-                        self.v.search_result_tracks.iter()
+                    match &self.v.current_panel {
+                        CurrentPanel::Playlist { tracks_info, .. } => {
+                            tracks_info.iter()
+                        }
+                        CurrentPanel::Recommendations { tracks_info, .. } => {
+                            tracks_info.iter()
+                        }
+                        CurrentPanel::Search { tracks_info, .. } => {
+                            tracks_info.iter()
+                        }
+                        _ => return
                     }
                 };
 
@@ -829,34 +797,44 @@ impl EspotApp {
                     
                     if track_name_label.clicked() && self.is_playlist_ready() {
                         let tracks = {
-                            if self.v.current_panel == CurrentPanel::Playlist {
-                                self.v.playback_status.current_playlist_tracks.clone()
-                            }
-                            else if self.v.current_panel == CurrentPanel::Recommendations {
-                                self.v.playback_status.recommendations.clone()
-                            }
-                            else {
-                                self.v.search_result_tracks.clone()
+                            match &self.v.current_panel {
+                                CurrentPanel::Search { tracks_info, .. } => {
+                                    tracks_info.clone()
+                                }
+                                CurrentPanel::Playlist { tracks_info, .. } => {
+                                    tracks_info.clone()
+                                }
+                                CurrentPanel::Recommendations { tracks_info, .. } => {
+                                    tracks_info.clone()
+                                }
+                                _ => {
+                                    return;
+                                }
                             }
                         };
 
                         self.v.playback_status.paused = false;
                         self.v.playback_status.started = true;
 
-                        self.send_player_msg(PlayerControl::StartPlaylistAtTrack(tracks.clone(), track.clone()));
+                        self.send_player_msg(PlayerControl::StartPlaylistAtTrack(tracks, track.clone()));
                     }
 
                     track_name_label.context_menu(| ui | {
                         if ui.selectable_label(false, "Play from here").clicked() {
                             let tracks = {
-                                if self.v.current_panel == CurrentPanel::Playlist {
-                                    self.v.playback_status.current_playlist_tracks.clone()
-                                }
-                                else if self.v.current_panel == CurrentPanel::Recommendations {
-                                    self.v.playback_status.recommendations.clone()
-                                }
-                                else {
-                                    self.v.search_result_tracks.clone()
+                                match &self.v.current_panel {
+                                    CurrentPanel::Search { tracks_info, .. } => {
+                                        tracks_info.clone()
+                                    }
+                                    CurrentPanel::Playlist { tracks_info, .. } => {
+                                        tracks_info.clone()
+                                    }
+                                    CurrentPanel::Recommendations { tracks_info, .. } => {
+                                        tracks_info.clone()
+                                    }
+                                    _ => {
+                                        return;
+                                    }
                                 }
                             };
 
@@ -875,28 +853,31 @@ impl EspotApp {
                             }
                         });
 
-                        if self.v.current_panel == CurrentPanel::Playlist && ui.selectable_label(false, "Remove").clicked() {
-                            if let Some(i) = self.v.playback_status.current_playlist.as_ref() {
-                                let id = self.v.user_playlists[*i].0.clone();
-                                remove_track = Some((id, track.id.clone(), track_idx));
-                            }
+                        if let CurrentPanel::Playlist { id, .. } = &self.v.current_panel {
+                            if ui.selectable_label(false, "Remove").clicked() {
+                                let id = id.clone();
 
-                            ui.close_menu();
+                                remove_track = Some((id, track.id.clone(), track_idx));
+                                ui.close_menu();
+                            }
                         }
                     });
                 }
             });
 
             if let Some((playlist, track_id, track_idx)) = remove_track {
-                if self.v.current_panel == CurrentPanel::Playlist {
-                    self.v.fetching_user_playlists = true;
-                    self.v.playback_status.current_playlist_tracks.remove(track_idx);
-
-                    self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(track_id, playlist));
-                    self.send_worker_msg(WorkerTask::GetUserPlaylists);
-                }
-                else if self.v.current_panel == CurrentPanel::Recommendations {
-                    self.v.playback_status.recommendations.remove(track_idx);
+                match &mut self.v.current_panel {
+                    CurrentPanel::Playlist { tracks_info, waiting_for_info, .. } => {
+                        *waiting_for_info = true;
+                        tracks_info.remove(track_idx);
+    
+                        self.send_worker_msg(WorkerTask::RemoveTrackFromPlaylist(track_id, playlist));
+                        self.send_worker_msg(WorkerTask::GetUserPlaylists);
+                    }
+                    CurrentPanel::Recommendations { tracks_info, .. } => {
+                        tracks_info.remove(track_idx);
+                    }
+                    _ => {}
                 }
             }
 
@@ -973,24 +954,32 @@ impl EspotApp {
 
                         self.v.textures_featured_playlists_covers = vec![None; self.v.featured_playlists.len()];
                     }
-                    WorkerResult::SearchResult(result) => {
-                        if let SearchResult::Tracks(tracks) = &result {
-                            self.v.search_result_tracks = tracks.items
-                                .iter()
-                                .filter_map(| t | TrackInfo::new(t.clone()))
-                                .collect()
-                            ;
+                    WorkerResult::SearchResult(s_result) => {
+                        if let CurrentPanel::Search { result, tracks_info, waiting_for_info, .. } = &mut self.v.current_panel {
+                            if let SearchResult::Tracks(tracks) = &s_result {
+                                *tracks_info = tracks.items
+                                    .iter()
+                                    .filter_map(| t | TrackInfo::new(t.clone()))
+                                    .collect()
+                                ;
+                            }
+    
+                            *result = Some(s_result);
+                            *waiting_for_info = false;
                         }
-
-                        self.v.search_result = Some(result);
-                        self.v.search_waiting_for_results = false;
+                        
                     }
                     WorkerResult::PlaylistTrackInfo(tracks) => {
-                        self.v.playback_status.current_playlist_tracks = tracks;
+                        if let CurrentPanel::Playlist { tracks_info, waiting_for_info, .. } = &mut self.v.current_panel {
+                            *tracks_info = tracks;
+                            *waiting_for_info = false;
+                        }
                     }
                     WorkerResult::PlaylistRecommendations(tracks) => {
-                        self.v.playback_status.recommendations = tracks;
-                        self.v.fetching_playlist_recommendations = false;
+                        if let CurrentPanel::Recommendations { tracks_info, waiting_for_info } = &mut self.v.current_panel {
+                            *tracks_info = tracks;
+                            *waiting_for_info = false;
+                        }
                     }
                 }
             }
@@ -998,26 +987,16 @@ impl EspotApp {
     }
 
     fn is_playlist_ready(&self) -> bool {
-        match self.v.current_panel {
-            CurrentPanel::Home => false,
-            CurrentPanel::Search => {
-                !self.v.search_waiting_for_results && self.v.search_result.is_some() && !self.v.search_result_tracks.is_empty()
+        match &self.v.current_panel {
+            CurrentPanel::Home => self.v.playback_status.started,
+            CurrentPanel::Search { result, tracks_info, waiting_for_info, .. } => {
+                result.is_some() && !tracks_info.is_empty() && !waiting_for_info
             }
-            CurrentPanel::Playlist => {
-                if let Some(i) = self.v.playback_status.current_playlist.as_ref() {
-                    if let Some((_, p)) = self.v.user_playlists.get(*i) {
-                        self.v.playback_status.current_playlist_tracks.len() == p.tracks.len()
-                    }
-                    else {
-                        false
-                    }
-                }
-                else {
-                    false
-                }
+            CurrentPanel::Playlist { data, tracks_info, waiting_for_info, .. } => {
+                data.tracks.len() == tracks_info.len() && !waiting_for_info
             }
-            CurrentPanel::Recommendations => {
-                !self.v.fetching_playlist_recommendations && !self.v.playback_status.recommendations.is_empty()
+            CurrentPanel::Recommendations { tracks_info, waiting_for_info } => {
+                !tracks_info.is_empty() && !waiting_for_info
             }
         }
     }
