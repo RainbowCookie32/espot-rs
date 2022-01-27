@@ -701,7 +701,7 @@ impl EspotApp {
                             let chars = track_name.chars().collect::<Vec<char>>();
 
                             if let Some(c) = chars.get(0) {
-                                cols[0].fonts().glyph_width(egui::TextStyle::Body, *c)
+                                cols[0].fonts().glyph_width(egui::TextStyle::Body, c.to_ascii_uppercase())
                             }
                             else {
                                 cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A')
@@ -736,7 +736,7 @@ impl EspotApp {
                             let chars = artists_string.chars().collect::<Vec<char>>();
 
                             if let Some(c) = chars.get(0) {
-                                cols[1].fonts().glyph_width(egui::TextStyle::Body, *c)
+                                cols[1].fonts().glyph_width(egui::TextStyle::Body, c.to_ascii_uppercase())
                             }
                             else {
                                 cols[1].fonts().glyph_width(egui::TextStyle::Body, 'A')
@@ -761,7 +761,7 @@ impl EspotApp {
                             let chars = album_name.chars().collect::<Vec<char>>();
 
                             if let Some(c) = chars.get(0) {
-                                cols[2].fonts().glyph_width(egui::TextStyle::Body, *c)
+                                cols[2].fonts().glyph_width(egui::TextStyle::Body, c.to_ascii_uppercase())
                             }
                             else {
                                 cols[2].fonts().glyph_width(egui::TextStyle::Body, 'A')
