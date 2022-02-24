@@ -35,17 +35,16 @@ pub fn make_artists_string(artists: &[String]) -> String {
 }
 
 pub fn trim_string(available_width: f32, glyph_width: f32, text: &mut String) -> bool {
-    let mut char_count = text.chars().count();
+    let char_count = text.chars().count();
 
-    let space_limit = (available_width / glyph_width) as usize;
-    let should_trim = char_count >= space_limit;
+    let max_chars = (available_width / glyph_width) as usize;
+    let should_trim = char_count >= max_chars;
 
     if should_trim {
-        while char_count > 0 && char_count >= space_limit {
-            text.pop();
-            char_count -= 1;
-        }
+        let mut t = text.chars().collect::<Vec<char>>();
+        t.truncate(max_chars - 3);
 
+        *text = t.into_iter().collect::<String>();
         text.push_str("...");
     }
 

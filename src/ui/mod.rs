@@ -678,6 +678,8 @@ impl EspotApp {
             let mut remove_track = None;
             let mut start_playlist = None;
 
+            let glyph_width = ui.fonts().glyph_width(&egui::TextStyle::Body.resolve(ui.style()), 'の');
+
             ui.columns(4, | cols | {
                 let tracks_iter = {
                     match &self.v.current_panel {
@@ -699,19 +701,15 @@ impl EspotApp {
                 cols[2].label("Album");
                 cols[3].label("Duration");
 
+                let available_width_c0 = cols[0].available_size_before_wrap().x;
+                let available_width_c1 = cols[1].available_size_before_wrap().x;
+                let available_width_c2 = cols[2].available_size_before_wrap().x;
+                let available_width_c3 = cols[3].available_size_before_wrap().x;
+
                 for (track_idx, track) in tracks_iter.enumerate() {
                     let track_name_label = {
                         let mut track_name = track.name.clone();
-
-                        let glyph_width = {
-                            let chars = track_name.chars().collect::<Vec<char>>();
-                            let font_id = egui::TextStyle::Body.resolve(cols[0].style());
-                            
-                            cols[0].fonts().glyph_width(&font_id, chars[0])
-                        };
-
-                        let available_width = cols[0].available_width();
-                        let trimmed = utils::trim_string(available_width, glyph_width, &mut track_name);
+                        let trimmed = utils::trim_string(available_width_c0, glyph_width, &mut track_name);
 
                         let checked = {
                             if let Some(t) = self.v.playback_status.current_track.as_ref() {
@@ -733,16 +731,7 @@ impl EspotApp {
                     let _track_artist_label = {
                         let artists = utils::make_artists_string(&track.artists);
                         let mut artists_string = artists.clone();
-
-                        let glyph_width = {
-                            let chars = artists_string.chars().collect::<Vec<char>>();
-                            let font_id = egui::TextStyle::Body.resolve(cols[1].style());
-                            
-                            cols[1].fonts().glyph_width(&font_id, chars[0])
-                        };
-
-                        let available_width = cols[1].available_width();
-                        let trimmed = utils::trim_string(available_width, glyph_width, &mut artists_string);
+                        let trimmed = utils::trim_string(available_width_c1, glyph_width, &mut artists_string);
 
                         if trimmed {
                             cols[1].selectable_label(false, artists_string).on_hover_text(artists)
@@ -754,16 +743,7 @@ impl EspotApp {
 
                     let _track_album_label = {
                         let mut album_name = track.album_name.clone();
-
-                        let glyph_width = {
-                            let chars = album_name.chars().collect::<Vec<char>>();
-                            let font_id = egui::TextStyle::Body.resolve(cols[2].style());
-                            
-                            cols[2].fonts().glyph_width(&font_id, chars[0])
-                        };
-
-                        let available_width = cols[2].available_width();
-                        let trimmed = utils::trim_string(available_width, glyph_width, &mut album_name);
+                        let trimmed = utils::trim_string(available_width_c2, glyph_width, &mut album_name);
 
                         if trimmed {
                             cols[2].selectable_label(false, album_name).on_hover_text(track.album_name.clone())
@@ -776,10 +756,7 @@ impl EspotApp {
                     let _track_duration_label = {
                         let duration = format!("{}:{:02}", (track.duration_ms / 1000) / 60, (track.duration_ms / 1000) % 60);
                         let mut duration_string = duration.clone();
-
-                        let available_width = cols[3].available_width();
-                        let glyph_width = cols[3].fonts().glyph_width(&egui::TextStyle::Body.resolve(cols[3].style()), '0');
-                        let trimmed = utils::trim_string(available_width, glyph_width, &mut duration_string);
+                        let trimmed = utils::trim_string(available_width_c3, glyph_width, &mut duration_string);
 
                         if trimmed {
                             cols[3].selectable_label(false, duration_string).on_hover_text(duration)
