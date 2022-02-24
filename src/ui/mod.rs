@@ -10,7 +10,6 @@ use librespot::metadata::Playlist;
 use rspotify::model::{SearchResult, SearchType};
 
 use crate::spotify::*;
-use crate::spinner::Spinner;
 
 enum CurrentPanel {
     Home,
@@ -240,7 +239,7 @@ impl EspotApp {
                     }
                 }
                 else {
-                    ui.add(Spinner::new());
+                    ui.add(egui::Spinner::new());
                 }
             });
         });
@@ -456,7 +455,7 @@ impl EspotApp {
             ui.heading("Your playlists");
 
             if self.v.fetching_user_playlists {
-                ui.add(Spinner::new());
+                ui.add(egui::Spinner::new());
             }
         });
 
@@ -503,7 +502,7 @@ impl EspotApp {
             ui.heading("Featured by Spotify");
 
             if self.v.fetching_featured_playlists {
-                ui.add(Spinner::new());
+                ui.add(egui::Spinner::new());
             }
         });
 
@@ -623,7 +622,7 @@ impl EspotApp {
                 ui.strong(label);
 
                 if !self.is_playlist_ready() {
-                    ui.add(Spinner::new());
+                    ui.add(egui::Spinner::new());
                 }
                 else if ui.button("Play").clicked() {
                     self.v.playback_status.started = true;
@@ -658,7 +657,7 @@ impl EspotApp {
                 }
                 else {
                     ui.strong("Fetching recommendations...");
-                    ui.add(Spinner::new());
+                    ui.add(egui::Spinner::new());
                 }
     
                 if ui.button("Play").clicked() {

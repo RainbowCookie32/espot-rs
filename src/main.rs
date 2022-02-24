@@ -6,7 +6,6 @@ mod dbus;
 
 mod ui;
 mod spotify;
-mod spinner;
 
 fn main() {
     let app = ui::EspotApp::default();
