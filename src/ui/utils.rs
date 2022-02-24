@@ -1,25 +1,23 @@
 use std::path::PathBuf;
 
-use eframe::egui::TextureId;
-use eframe::epi::{Frame, Image};
-
-use image::GenericImageView;
+use eframe::egui::{Context, ColorImage, TextureHandle};
 
 
-pub fn create_texture_from_file(frame: &Frame, path: PathBuf) -> Option<TextureId> {
+pub fn create_texture_from_file(ctx: &Context, path: PathBuf) -> Option<TextureHandle> {
     let buffer = std::fs::read(path).ok()?;
-    create_texture_from_bytes(frame, &buffer)
+    create_texture_from_bytes(ctx, &buffer)
 }
 
-pub fn create_texture_from_bytes(frame: &Frame, buffer: &[u8]) -> Option<TextureId> {
+pub fn create_texture_from_bytes(ctx: &Context, buffer: &[u8]) -> Option<TextureHandle> {
     let image = image::load_from_memory(buffer).ok()?;
 
     let image_buf = image.to_rgba8();
     let image_size = [image.width() as usize, image.height() as usize];
     let image_pixels = image_buf.into_vec();
 
-    let image = Image::from_rgba_unmultiplied(image_size, &image_pixels);
-    Some(frame.alloc_texture(image))
+    let image = ColorImage::from_rgba_unmultiplied(image_size, &image_pixels);
+
+    Some(ctx.load_texture("texture", image))
 }
 
 pub fn make_artists_string(artists: &[String]) -> String {

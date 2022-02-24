@@ -74,11 +74,11 @@ struct VolatileData {
     worker_task_tx: Option<mpsc::UnboundedSender<WorkerTask>>,
     worker_result_rx: Option<mpsc::UnboundedReceiver<WorkerResult>>,
 
-    texture_no_cover: Option<egui::TextureId>,
-    texture_album_cover: Option<egui::TextureId>,
+    texture_no_cover: Option<egui::TextureHandle>,
+    texture_album_cover: Option<egui::TextureHandle>,
     
-    textures_user_playlists_covers: Vec<Option<egui::TextureId>>,
-    textures_featured_playlists_covers: Vec<Option<egui::TextureId>>
+    textures_user_playlists_covers: Vec<Option<egui::TextureHandle>>,
+    textures_featured_playlists_covers: Vec<Option<egui::TextureHandle>>
 }
 
 #[derive(Deserialize, Serialize)]
@@ -109,13 +109,19 @@ impl epi::App for EspotApp {
         "espot-rs"
     }
 
-    fn setup(&mut self, ctx: &egui::CtxRef, _frame: &epi::Frame, storage: Option<&dyn epi::Storage>) {
+    fn setup(&mut self, ctx: &egui::Context, _frame: &epi::Frame, storage: Option<&dyn epi::Storage>) {
         if let Some(storage) = storage {
             *self = epi::get_value(storage, epi::APP_KEY).unwrap_or_default()
         }
 
         if self.v.worker_task_tx.is_none() {
-            let (worker_task_tx, worker_result_rx, state_rx, state_rx_dbus, control_tx) = SpotifyWorker::start();
+            let (
+                worker_task_tx,
+                worker_result_rx,
+                state_rx,
+                state_rx_dbus,
+                control_tx
+            ) = SpotifyWorker::start();
 
             #[cfg(target_os = "linux")]
             #[cfg(not(debug_assertions))]
@@ -138,11 +144,11 @@ impl epi::App for EspotApp {
 
             definitions.font_data.insert("jp_font".to_owned(), font_data);
 
-            if let Some(f) = definitions.fonts_for_family.get_mut(&egui::FontFamily::Monospace) {
+            if let Some(f) = definitions.families.get_mut(&egui::FontFamily::Monospace) {
                 f.push(String::from("jp_font"));
             }
 
-            if let Some(f) = definitions.fonts_for_family.get_mut(&egui::FontFamily::Proportional) {
+            if let Some(f) = definitions.families.get_mut(&egui::FontFamily::Proportional) {
                 f.push(String::from("jp_font"));
             }
         }
@@ -154,16 +160,16 @@ impl epi::App for EspotApp {
         epi::set_value(storage, epi::APP_KEY, self);
     }
 
-    fn update(&mut self, ctx: &egui::CtxRef, frame: &epi::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &epi::Frame) {
         if self.v.texture_no_cover.is_none() {
             let buffer = include_bytes!("../../resources/no_cover.png");
-            self.v.texture_no_cover = utils::create_texture_from_bytes(frame, buffer);
+            self.v.texture_no_cover = utils::create_texture_from_bytes(ctx, buffer);
         }
 
         if let Some(track) = self.v.playback_status.current_track.as_ref() {
             if self.v.texture_album_cover.is_none() {
                 let path = self.p.cache_path.join(format!("cover-{}", &track.album_id));
-                self.v.texture_album_cover = utils::create_texture_from_file(frame, path);
+                self.v.texture_album_cover = utils::create_texture_from_file(ctx, path);
             }
         }
 
@@ -172,7 +178,7 @@ impl epi::App for EspotApp {
                 let (playlist_id, _) = &self.v.user_playlists[i];
                 let path = self.p.cache_path.join(format!("cover-{}", playlist_id));
             
-                *target = utils::create_texture_from_file(frame, path);
+                *target = utils::create_texture_from_file(ctx, path);
             }
         }
 
@@ -181,7 +187,7 @@ impl epi::App for EspotApp {
                 let (playlist_id, _) = &self.v.featured_playlists[i];
                 let path = self.p.cache_path.join(format!("cover-{}", playlist_id));
             
-                *target = utils::create_texture_from_file(frame, path);
+                *target = utils::create_texture_from_file(ctx, path);
             }
         }
 
@@ -202,7 +208,7 @@ impl epi::App for EspotApp {
             self.draw_login_screen(ctx);
         }
 
-        self.handle_messages(frame);
+        self.handle_messages();
 
         // TODO: Workaround for not being able to figure out how to request a repaint
         //       from the worker thread. Burns more resources than needed.
@@ -211,7 +217,7 @@ impl epi::App for EspotApp {
 }
 
 impl EspotApp {
-    fn draw_login_screen(&mut self, ctx: &egui::CtxRef) {
+    fn draw_login_screen(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, | ui | {
             ui.vertical_centered(| ui | {
                 ui.heading("espot-rs");
@@ -240,7 +246,7 @@ impl EspotApp {
         });
     }
 
-    fn draw_main_screen(&mut self, ctx: &egui::CtxRef) {
+    fn draw_main_screen(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("playback_status").show(ctx, | ui | {
             self.draw_playback_status(ui);
         });
@@ -261,11 +267,11 @@ impl EspotApp {
 
     fn draw_playback_status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(| ui | {
-            if let Some(id) = self.v.texture_album_cover.as_ref() {
-                ui.image(*id, egui::vec2(96.0, 96.0));
+            if let Some(handle) = self.v.texture_album_cover.as_ref() {
+                ui.image(handle.id(), egui::vec2(96.0, 96.0));
             }
-            else if let Some(id) = self.v.texture_no_cover.as_ref() {
-                ui.image(*id, egui::vec2(96.0, 96.0));
+            else if let Some(handle) = self.v.texture_no_cover.as_ref() {
+                ui.image(handle.id(), egui::vec2(96.0, 96.0));
             }
 
             ui.vertical(| ui | {
@@ -361,7 +367,8 @@ impl EspotApp {
 
             let playlists = ui.collapsing("Playlists", | ui | {
                 if !self.v.user_playlists.is_empty() {
-                    let glyph_width = ui.fonts().glyph_width(egui::TextStyle::Body, 'A');
+                    let font_id = egui::TextStyle::Body.resolve(ui.style());
+                    let glyph_width = ui.fonts().glyph_width(&font_id, 'A');
 
                     for (_id, p) in self.v.user_playlists.iter() {
                         let checked = {
@@ -460,19 +467,19 @@ impl EspotApp {
                 for (i, (id, playlist)) in self.v.user_playlists.iter().enumerate() {
                     let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
 
-                    let texture_id = {
-                        if let Some(Some(text_id)) = self.v.textures_user_playlists_covers.get(i)  {
-                            text_id
+                    let texture_handle = {
+                        if let Some(Some(handle)) = self.v.textures_user_playlists_covers.get(i)  {
+                            handle
                         }
-                        else if let Some(text_id) = self.v.texture_no_cover.as_ref() {
-                            text_id
+                        else if let Some(handle) = self.v.texture_no_cover.as_ref() {
+                            handle
                         }
                         else {
                             return;
                         }
                     };
 
-                    let button = ui.add(egui::ImageButton::new(*texture_id, egui::vec2(96.0, 96.0)).tint(tint));
+                    let button = ui.add(egui::ImageButton::new(texture_handle.id(), egui::vec2(96.0, 96.0)).tint(tint));
                     let text = egui::RichText::new(&playlist.name).strong();
                     let label = ui.put(button.rect, egui::Label::new(text));
 
@@ -507,19 +514,19 @@ impl EspotApp {
                 for (i, (_, playlist)) in self.v.featured_playlists.iter().enumerate() {
                     let tint = egui::Color32::from_rgba_unmultiplied(96 , 96, 96, 160);
 
-                    let texture_id = {
-                        if let Some(Some(text_id)) = self.v.textures_featured_playlists_covers.get(i)  {
-                            text_id
+                    let texture_handle = {
+                        if let Some(Some(handle)) = self.v.textures_featured_playlists_covers.get(i)  {
+                            handle
                         }
-                        else if let Some(text_id) = self.v.texture_no_cover.as_ref() {
-                            text_id
+                        else if let Some(handle) = self.v.texture_no_cover.as_ref() {
+                            handle
                         }
                         else {
                             return;
                         }
                     };
 
-                    let button = ui.add(egui::ImageButton::new(*texture_id, egui::vec2(96.0, 96.0)).tint(tint));
+                    let button = ui.add(egui::ImageButton::new(texture_handle.id(), egui::vec2(96.0, 96.0)).tint(tint));
                     let text = egui::RichText::new(&playlist.name).strong();
                     let label = ui.put(button.rect, egui::Label::new(text));
 
@@ -699,13 +706,9 @@ impl EspotApp {
 
                         let glyph_width = {
                             let chars = track_name.chars().collect::<Vec<char>>();
-
-                            if let Some(c) = chars.get(0) {
-                                cols[0].fonts().glyph_width(egui::TextStyle::Body, c.to_ascii_uppercase())
-                            }
-                            else {
-                                cols[0].fonts().glyph_width(egui::TextStyle::Body, 'A')
-                            }
+                            let font_id = egui::TextStyle::Body.resolve(cols[0].style());
+                            
+                            cols[0].fonts().glyph_width(&font_id, chars[0])
                         };
 
                         let available_width = cols[0].available_width();
@@ -734,13 +737,9 @@ impl EspotApp {
 
                         let glyph_width = {
                             let chars = artists_string.chars().collect::<Vec<char>>();
-
-                            if let Some(c) = chars.get(0) {
-                                cols[1].fonts().glyph_width(egui::TextStyle::Body, c.to_ascii_uppercase())
-                            }
-                            else {
-                                cols[1].fonts().glyph_width(egui::TextStyle::Body, 'A')
-                            }
+                            let font_id = egui::TextStyle::Body.resolve(cols[1].style());
+                            
+                            cols[1].fonts().glyph_width(&font_id, chars[0])
                         };
 
                         let available_width = cols[1].available_width();
@@ -759,13 +758,9 @@ impl EspotApp {
 
                         let glyph_width = {
                             let chars = album_name.chars().collect::<Vec<char>>();
-
-                            if let Some(c) = chars.get(0) {
-                                cols[2].fonts().glyph_width(egui::TextStyle::Body, c.to_ascii_uppercase())
-                            }
-                            else {
-                                cols[2].fonts().glyph_width(egui::TextStyle::Body, 'A')
-                            }
+                            let font_id = egui::TextStyle::Body.resolve(cols[2].style());
+                            
+                            cols[2].fonts().glyph_width(&font_id, chars[0])
                         };
 
                         let available_width = cols[2].available_width();
@@ -784,7 +779,7 @@ impl EspotApp {
                         let mut duration_string = duration.clone();
 
                         let available_width = cols[3].available_width();
-                        let glyph_width = cols[3].fonts().glyph_width(egui::TextStyle::Body, '0');
+                        let glyph_width = cols[3].fonts().glyph_width(&egui::TextStyle::Body.resolve(cols[3].style()), '0');
                         let trimmed = utils::trim_string(available_width, glyph_width, &mut duration_string);
 
                         if trimmed {
@@ -892,7 +887,7 @@ impl EspotApp {
         });
     }
 
-    fn handle_messages(&mut self, frame: &epi::Frame) {
+    fn handle_messages(&mut self) {
         if let Some(rx) = self.v.state_rx.as_mut() {
             if let Ok(state) = rx.try_recv() {
                 match state {
@@ -904,20 +899,12 @@ impl EspotApp {
                     }
                     PlayerStateUpdate::Stopped => {
                         self.v.playback_status.current_track = None;
-
-                        if let Some(id) = self.v.texture_album_cover {
-                            frame.free_texture(id);
-                            self.v.texture_album_cover = None;
-                        }
+                        self.v.texture_album_cover = None;
                     }
                     PlayerStateUpdate::EndOfTrack(track) => {
                         self.v.playback_status.paused = false;
                         self.v.playback_status.current_track = Some(track);
-
-                        if let Some(id) = self.v.texture_album_cover {
-                            frame.free_texture(id);
-                            self.v.texture_album_cover = None;
-                        }
+                        self.v.texture_album_cover = None;
                     }
                 }
             }
@@ -937,21 +924,11 @@ impl EspotApp {
                     WorkerResult::UserPlaylists(playlists) => {
                         self.v.user_playlists = playlists;
                         self.v.fetching_user_playlists = false;
-                        
-                        for id in self.v.textures_user_playlists_covers.iter().flatten() {
-                            frame.free_texture(*id);
-                        }
-                        
                         self.v.textures_user_playlists_covers = vec![None; self.v.user_playlists.len()];
                     }
                     WorkerResult::FeaturedPlaylists(playlists) => {
                         self.v.featured_playlists = playlists;
                         self.v.fetching_featured_playlists = false;
-                        
-                        for id in self.v.textures_featured_playlists_covers.iter().flatten() {
-                            frame.free_texture(*id);
-                        }
-
                         self.v.textures_featured_playlists_covers = vec![None; self.v.featured_playlists.len()];
                     }
                     WorkerResult::SearchResult(s_result) => {
