@@ -48,13 +48,16 @@ struct PlaybackStatus {
 #[derive(Deserialize, Serialize)]
 struct PersistentData {
     cache_path: PathBuf,
-    login_username: String
+
+    login_username: String,
+    login_remember: bool
 }
 
 #[derive(Default)]
 struct VolatileData {
     logged_in: bool,
     login_password: String,
+    keyring_login_attempted: bool,
     waiting_for_login_result: bool,
 
     current_panel: CurrentPanel,
@@ -91,7 +94,9 @@ impl Default for EspotApp {
     fn default() -> EspotApp {
         let p = PersistentData {
             cache_path: dirs::cache_dir().unwrap().join("espot-rs"),
-            login_username: String::new()
+
+            login_username: String::new(),
+            login_remember: false
         };
 
         let v = VolatileData::default();
@@ -223,24 +228,47 @@ impl EspotApp {
                 ui.separator();
             });
 
-            ui.vertical_centered(| ui | {
-                ui.label("Username");
-                let usr_field = ui.text_edit_singleline(&mut self.p.login_username);
+            ui.add_enabled_ui(!self.v.waiting_for_login_result, | ui | {
+                ui.vertical_centered(| ui | {
+                    ui.label("Username");
+                    let usr_field = ui.text_edit_singleline(&mut self.p.login_username);
+    
+                    ui.label("Password");
+                    let pwd_field = ui.add(egui::TextEdit::singleline(&mut self.v.login_password).password(true));
 
-                ui.label("Password");
-                let pwd_field = ui.add(egui::TextEdit::singleline(&mut self.v.login_password).password(true));
+                    ui.checkbox(&mut self.p.login_remember, "Remember me");
+    
+                    let submitted = (usr_field.lost_focus() || pwd_field.lost_focus()) && ui.input().key_pressed(egui::Key::Enter);
+    
+                    if !self.v.waiting_for_login_result {
+                        if !self.p.login_username.is_empty() && self.p.login_remember && !self.v.keyring_login_attempted {
+                            let entry = keyring::Entry::new("espot-rs", &self.p.login_username);
 
-                let submitted = (usr_field.lost_focus() || pwd_field.lost_focus()) && ui.input().key_pressed(egui::Key::Enter);
+                            self.v.keyring_login_attempted = true;
 
-                if !self.v.waiting_for_login_result {
-                    if ui.button("Log in").clicked() || submitted {
-                        self.v.waiting_for_login_result = true;
-                        self.send_worker_msg(WorkerTask::Login(self.p.login_username.clone(), self.v.login_password.clone()));
+                            if let Ok(data) = ron::from_str(&entry.get_password().unwrap_or_default()) {
+                                self.v.waiting_for_login_result = true;
+                                self.send_worker_msg(WorkerTask::Login(data));
+                            }
+                            else {
+                                println!("oof")
+                            }
+                        }
+                        else if ui.button("Log in").clicked() || submitted {
+                            let login_data = LoginData {
+                                username: self.p.login_username.clone(),
+                                password: self.v.login_password.clone(),
+                                api_token: None
+                            };
+    
+                            self.v.waiting_for_login_result = true;
+                            self.send_worker_msg(WorkerTask::Login(login_data));
+                        }
                     }
-                }
-                else {
-                    ui.add(egui::Spinner::new());
-                }
+                    else {
+                        ui.add(egui::Spinner::new());
+                    }
+                });
             });
         });
     }
@@ -890,7 +918,19 @@ impl EspotApp {
             if let Ok(worker_res) = rx.try_recv() {
                 match worker_res {
                     WorkerResult::Login(result) => {
-                        if result {
+                        if let Some(t) = result {
+                            if self.p.login_remember {
+                                let entry = keyring::Entry::new("espot-rs", &self.p.login_username);
+                                let login_data = LoginData {
+                                    username: self.p.login_username.clone(),
+                                    password: self.v.login_password.clone(),
+                                    api_token: Some(t)
+                                };
+
+                                let serialized = ron::to_string(&login_data).unwrap_or_default();
+                                entry.set_password(&serialized);
+                            }
+
                             self.v.logged_in = true;
                         }
     

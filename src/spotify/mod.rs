@@ -1,9 +1,10 @@
 mod cache;
 mod error;
 
-use nanorand::{Rng, WyRand};
-
 use tiny_http::Server;
+use nanorand::{Rng, WyRand};
+use serde::{Deserialize, Serialize};
+
 use tokio::runtime::Runtime;
 use tokio::sync::{broadcast, mpsc};
 
@@ -17,6 +18,7 @@ use librespot::metadata::{Playlist, Metadata};
 use librespot::playback::config;
 use librespot::playback::player::{Player, PlayerEvent};
 
+use rspotify::Token;
 use rspotify::auth_code::AuthCodeSpotify;
 use rspotify::clients::{OAuthClient, BaseClient};
 use rspotify::model::{Id, TrackId, PlaylistId, PlayableId, ArtistId, SimplifiedPlaylist, SearchResult, SearchType};
@@ -40,9 +42,16 @@ type ControlRx = mpsc::UnboundedReceiver<PlayerControl>;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LoginData {
+    pub username: String,
+    pub password: String,
+    pub api_token: Option<Token>
+}
+
 #[derive(Debug)]
 pub enum WorkerTask {
-    Login(String, String),
+    Login(LoginData),
     
     GetUserPlaylists,
     GetFeaturedPlaylists,
@@ -57,7 +66,7 @@ pub enum WorkerTask {
 
 #[derive(Debug)]
 pub enum WorkerResult {
-    Login(bool),
+    Login(Option<Token>),
 
     UserPlaylists(Vec<(String, Playlist)>),
     FeaturedPlaylists(Vec<(String, Playlist)>),
@@ -164,16 +173,18 @@ impl SpotifyWorker {
         loop {
             if let Ok(task) = self.worker_task_rx.try_recv() {
                 match task {
-                    WorkerTask::Login(username, password) => {
-                        let mut result = false;
+                    WorkerTask::Login(data) => {
+                        let mut token = None;
 
-                        if let Ok(rx) = self.login_task(username, password).await {
-                            result = true;
+                        if let Ok((t, rx)) = self.login_task(data).await {
+                            token = Some(t);
                             player_events = Some(rx);
                         }
+                        else {
+                            // TODO: Pass the error to the UI and show to user.
+                        }
                         
-                        // TODO: Pass the error to the UI and show to user.
-                        self.worker_result_tx.send(WorkerResult::Login(result)).unwrap();
+                        self.worker_result_tx.send(WorkerResult::Login(token)).unwrap();
                     }
                     WorkerTask::GetUserPlaylists => {
                         if let Ok(result) = self.fetch_user_playlists_task().await {
@@ -318,9 +329,9 @@ impl SpotifyWorker {
         }
     }
 
-    async fn login_task(&mut self, username: String, password: String) -> Result<mpsc::UnboundedReceiver<PlayerEvent>> {
+    async fn login_task(&mut self, data: LoginData) -> Result<(Token, mpsc::UnboundedReceiver<PlayerEvent>)> {
         let session_cfg = SessionConfig::default();
-        let session_creds = Credentials::with_password(username, password);
+        let session_creds = Credentials::with_password(data.username, data.password);
 
         let mut api_client = {
             let api_creds = rspotify::Credentials::from_env().ok_or(error::APILoginError::Credentials)?;
@@ -341,56 +352,70 @@ impl SpotifyWorker {
             AuthCodeSpotify::with_config(api_creds, api_oauth, api_cfg)
         };
 
-        let url = api_client.get_authorize_url(false).unwrap_or_default();
-        
-        if !url.is_empty() {
-            let server = Server::http("0.0.0.0:8888").unwrap();
-            let mut code = String::new();
-
-            webbrowser::open(&url)?;
-
-            for request in server.incoming_requests() {
-                if request.url().contains("callback") {
-                    let uri_split = request.url().split('=').collect::<Vec<&str>>()[1];
-                    let uri_split = uri_split.split('&').collect::<Vec<&str>>()[0];
-
-                    code = uri_split.to_string();
-                    break;
-                }
+        if let Some(saved_token) = data.api_token {
+            if let Ok(mut token_lock) = api_client.token.lock().await {
+                *token_lock = Some(saved_token);
             }
-            
-            api_client.request_token(&code).await?;
+            else {
+                return Err(Box::new(error::APILoginError::Token));
+            }
 
-            let player_cfg = config::PlayerConfig {
-                gapless: true,
-                normalisation_type: config::NormalisationType::Auto,
-                normalisation_method: config::NormalisationMethod::Dynamic,
-                ..Default::default()
-            };
-
-            let cache = {
-                let cache_dir = dirs::cache_dir().unwrap().join("espot-rs");
-                let system_location = Some(cache_dir.join("system"));
-                let audio_location = Some(cache_dir.join("audio"));
-                
-                librespot::core::cache::Cache::new(system_location, audio_location, None).ok()
-            };
-            
-            let session = Session::connect(session_cfg, session_creds, cache).await?;
-
-            let (player, rx) = Player::new(player_cfg, session.clone(), None, move || {
-                librespot::playback::audio_backend::find(None).unwrap()(None, config::AudioFormat::default())
-            });
-
-            self.api_client = Some(api_client);
-            self.spotify_player = Some(player);
-            self.spotify_session = Some(session);
-
-            Ok(rx)
+            self.api_client = Some(api_client.clone());
         }
         else {
-            Err(Box::new(error::APILoginError::Token))
+            let url = api_client.get_authorize_url(false).unwrap_or_default();
+        
+            if !url.is_empty() {
+                let server = Server::http("0.0.0.0:8888").unwrap();
+                let mut code = String::new();
+    
+                webbrowser::open(&url)?;
+    
+                for request in server.incoming_requests() {
+                    if request.url().contains("callback") {
+                        let uri_split = request.url().split('=').collect::<Vec<&str>>()[1];
+                        let uri_split = uri_split.split('&').collect::<Vec<&str>>()[0];
+    
+                        code = uri_split.to_string();
+                        break;
+                    }
+                }
+                
+                api_client.request_token(&code).await?;
+                self.api_client = Some(api_client.clone());
+            }
+            else {
+                return Err(Box::new(error::APILoginError::Token));
+            }
         }
+
+        let player_cfg = config::PlayerConfig {
+            gapless: true,
+            normalisation_type: config::NormalisationType::Auto,
+            normalisation_method: config::NormalisationMethod::Dynamic,
+            ..Default::default()
+        };
+
+        let cache = {
+            let cache_dir = dirs::cache_dir().unwrap().join("espot-rs");
+            let system_location = Some(cache_dir.join("system"));
+            let audio_location = Some(cache_dir.join("audio"));
+            
+            librespot::core::cache::Cache::new(system_location, audio_location, None).ok()
+        };
+        
+        let session = Session::connect(session_cfg, session_creds, cache).await?;
+
+        let (player, rx) = Player::new(player_cfg, session.clone(), None, move || {
+            librespot::playback::audio_backend::find(None).unwrap()(None, config::AudioFormat::default())
+        });
+
+        self.spotify_player = Some(player);
+        self.spotify_session = Some(session);
+
+        let token_lock = api_client.token.lock().await.unwrap();
+    
+        Ok((token_lock.clone().unwrap(), rx))
     }
 
     async fn fetch_user_playlists_task(&mut self) -> Result<Vec<(String, Playlist)>> {        
