@@ -2,7 +2,7 @@ mod utils;
 
 use std::path::PathBuf;
 
-use eframe::{egui, epi};
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
@@ -108,63 +108,12 @@ impl Default for EspotApp {
     }
 }
 
-impl epi::App for EspotApp {
-    fn name(&self) -> &str {
-        "espot-rs"
+impl eframe::App for EspotApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, eframe::APP_KEY, self);
     }
 
-    fn setup(&mut self, ctx: &egui::Context, _frame: &epi::Frame, storage: Option<&dyn epi::Storage>) {
-        if let Some(storage) = storage {
-            *self = epi::get_value(storage, epi::APP_KEY).unwrap_or_default()
-        }
-
-        if self.v.worker_task_tx.is_none() {
-            let (
-                worker_task_tx,
-                worker_result_rx,
-                state_rx,
-                state_rx_dbus,
-                control_tx
-            ) = SpotifyWorker::start();
-
-            #[cfg(target_os = "linux")]
-            #[cfg(not(debug_assertions))]
-            crate::dbus::start_dbus_server(state_rx_dbus, control_tx.clone());
-
-            self.v.state_rx = Some(state_rx);
-            self.v.control_tx = Some(control_tx);
-
-            self.v.worker_task_tx = Some(worker_task_tx);
-            self.v.worker_result_rx = Some(worker_result_rx);
-        }
-
-        self.v.playback_status.paused = true;
-        self.p.cache_path = dirs::cache_dir().unwrap().join("espot-rs");
-
-        let mut definitions = egui::FontDefinitions::default();
-
-        if let Ok(font) = std::fs::read("resources/fonts/japanese.otf") {
-            let font_data = egui::FontData::from_owned(font);
-
-            definitions.font_data.insert("jp_font".to_owned(), font_data);
-
-            if let Some(f) = definitions.families.get_mut(&egui::FontFamily::Monospace) {
-                f.push(String::from("jp_font"));
-            }
-
-            if let Some(f) = definitions.families.get_mut(&egui::FontFamily::Proportional) {
-                f.push(String::from("jp_font"));
-            }
-        }
-
-        ctx.set_fonts(definitions)
-    }
-
-    fn save(&mut self, storage: &mut dyn epi::Storage) {
-        epi::set_value(storage, epi::APP_KEY, self);
-    }
-
-    fn update(&mut self, ctx: &egui::Context, _frame: &epi::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.v.texture_no_cover.is_none() {
             let buffer = include_bytes!("../../resources/no_cover.png");
             self.v.texture_no_cover = utils::create_texture_from_bytes(ctx, buffer);
@@ -221,6 +170,56 @@ impl epi::App for EspotApp {
 }
 
 impl EspotApp {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> EspotApp {
+        let mut app = EspotApp::default();
+
+        if let Some(storage) = cc.storage {
+            app = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
+        }
+
+        if app.v.worker_task_tx.is_none() {
+            let (
+                worker_task_tx,
+                worker_result_rx,
+                state_rx,
+                state_rx_dbus,
+                control_tx
+            ) = SpotifyWorker::start();
+
+            #[cfg(target_os = "linux")]
+            #[cfg(not(debug_assertions))]
+            crate::dbus::start_dbus_server(state_rx_dbus, control_tx.clone());
+
+            app.v.state_rx = Some(state_rx);
+            app.v.control_tx = Some(control_tx);
+
+            app.v.worker_task_tx = Some(worker_task_tx);
+            app.v.worker_result_rx = Some(worker_result_rx);
+        }
+
+        app.v.playback_status.paused = true;
+        app.p.cache_path = dirs::cache_dir().unwrap().join("espot-rs");
+
+        let mut definitions = egui::FontDefinitions::default();
+
+        if let Ok(font) = std::fs::read("resources/fonts/japanese.otf") {
+            let font_data = egui::FontData::from_owned(font);
+
+            definitions.font_data.insert("jp_font".to_owned(), font_data);
+
+            if let Some(f) = definitions.families.get_mut(&egui::FontFamily::Monospace) {
+                f.push(String::from("jp_font"));
+            }
+
+            if let Some(f) = definitions.families.get_mut(&egui::FontFamily::Proportional) {
+                f.push(String::from("jp_font"));
+            }
+        }
+
+        cc.egui_ctx.set_fonts(definitions);
+        app
+    }
+
     fn draw_login_screen(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, | ui | {
             ui.vertical_centered(| ui | {
